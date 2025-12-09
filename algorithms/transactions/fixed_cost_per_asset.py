@@ -9,5 +9,39 @@ class FixedCostPerAsset(Costs):
 
     def compute_cost(self, prev_weights: np.ndarray, new_weights: np.ndarray) -> float:
         n_trades = np.sum(np.abs(prev_weights - new_weights) >= 1e-12)
-
         return self.cost_per_transaction * n_trades
+
+    def gradient(self, prev_weights: np.ndarray, new_weights: np.ndarray) -> np.ndarray:
+        diff = new_weights - prev_weights
+        sign = np.sign(diff)
+        sign[np.isclose(diff, 0.0, atol=1e-12)] = 0.0
+
+        return self.cost_per_transaction * sign
+
+class FixedCostPerAssetSmooth(Costs):
+    """
+    Smoothed version of FixedCostPerAsset for better optimization.
+
+    Uses a smooth approximation: cost ~ c * sum(tanh(k * |diff|))
+    where k controls smoothness (higher k = closer to step function)
+    """
+
+    def __init__(self, cost_per_transaction: float, smoothness: float = 100.0):
+        self.cost_per_transaction = cost_per_transaction
+        self.smoothness = smoothness  # k parameter
+
+    def compute_cost(self, prev_weights: np.ndarray, new_weights: np.ndarray) -> float:
+        diff = np.abs(new_weights - prev_weights)
+        smooth_indicator = np.tanh(self.smoothness * diff)
+
+        return self.cost_per_transaction * np.sum(smooth_indicator)
+
+    def gradient(self, prev_weights: np.ndarray, new_weights: np.ndarray) -> np.ndarray:
+        diff = new_weights - prev_weights
+        abs_diff = np.abs(diff)
+
+        k = self.smoothness
+        sech_squared = 1.0 / np.cosh(k * abs_diff) ** 2
+        sign = np.sign(diff)
+
+        return self.cost_per_transaction * k * sech_squared * sign
