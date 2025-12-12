@@ -19,16 +19,9 @@ class FixedCostPerAsset(Costs):
         return self.cost_per_transaction * sign
 
 class FixedCostPerAssetSmooth(Costs):
-    """
-    Smoothed version of FixedCostPerAsset for better optimization.
-
-    Uses a smooth approximation: cost ~ c * sum(tanh(k * |diff|))
-    where k controls smoothness (higher k = closer to step function)
-    """
-
     def __init__(self, cost_per_transaction: float, smoothness: float = 100.0):
         self.cost_per_transaction = cost_per_transaction
-        self.smoothness = smoothness  # k parameter
+        self.smoothness = smoothness
 
     def compute_cost(self, prev_weights: np.ndarray, new_weights: np.ndarray) -> float:
         diff = np.abs(new_weights - prev_weights)

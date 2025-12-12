@@ -26,32 +26,10 @@ class FixedCostPerRebalancing(Costs):
         return 0.0
 
     def gradient(self, prev_weights: np.ndarray, new_weights: np.ndarray) -> np.ndarray:
-        """
-        Gradient for fixed cost per rebalancing.
-
-        Theoretical gradient:
-        - If no trade: gradient = 0 (we're at the cliff edge)
-        - If any trade: gradient = 0 (cost already incurred, doesn't change)
-        - At transition: undefined (discontinuous jump)
-
-        Practical approach: Return zero gradient since:
-        1. Optimization is already difficult with this cost structure
-        2. The optimizer should rely on the objective value itself
-        3. Non-zero gradients here would be misleading
-
-        Alternative: Use numerical_gradient from base class for better approximation.
-        """
         return np.zeros_like(new_weights)
 
 
 class FixedCostPerRebalancingSmooth(Costs):
-    """
-    Smoothed version of FixedCostPerRebalancing for better optimization.
-
-    Uses: cost ≈ c * tanh(k * ||p - prev||₁)
-    This smoothly transitions from 0 to c as portfolio changes.
-    """
-
     def __init__(self, cost_per_transaction: float, smoothness: float = 50.0):
         self.cost_per_transaction = cost_per_transaction
         self.smoothness = smoothness
@@ -62,11 +40,6 @@ class FixedCostPerRebalancingSmooth(Costs):
         return self.cost_per_transaction * np.tanh(self.smoothness * turnover)
 
     def gradient(self, prev_weights: np.ndarray, new_weights: np.ndarray) -> np.ndarray:
-        """
-        Analytical gradient of smooth approximation.
-
-        d/dp c*tanh(k*||p-prev||₁) = c*k*sech²(k*||p-prev||₁) * sign(p-prev)
-        """
         diff = new_weights - prev_weights
         turnover = np.sum(np.abs(diff))
 
