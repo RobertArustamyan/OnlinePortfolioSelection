@@ -5,6 +5,7 @@ https://www.schapire.net/papers/newton_portfolios.pdf
 import numpy as np
 from scipy.optimize import minimize
 from cvxopt import matrix, solvers
+import cvxpy as cp  # ADD THIS
 
 solvers.options['show_progress'] = False
 
@@ -56,21 +57,45 @@ class OnlineNewtonStepCosts:
 
         return mahalanobis + self.cost_penalty * transaction_cost
 
+    # def _project_to_simplex_standard(self, x, M):
+    #     m = M.shape[0]
+    #     P = matrix(2 * M)
+    #     q = matrix(-2 * M @ x)
+    #     G = matrix(-np.eye(m))
+    #     h = matrix(np.zeros((m, 1)))
+    #     A_eq = matrix(np.ones((1, m)))
+    #     b_eq = matrix(1.0)
+    #
+    #     sol = solvers.qp(P, q, G, h, A_eq, b_eq)
+    #
+    #     if sol['status'] != 'optimal':
+    #         raise RuntimeError(f"CVXOPT optimization failed: {sol['status']}")
+    #
+    #     return np.array(sol['x']).flatten()
+
     def _project_to_simplex_standard(self, x, M):
-        m = M.shape[0]
-        P = matrix(2 * M)
-        q = matrix(-2 * M @ x)
-        G = matrix(-np.eye(m))
-        h = matrix(np.zeros((m, 1)))
-        A_eq = matrix(np.ones((1, m)))
-        b_eq = matrix(1.0)
+        """Project onto simplex using CVXPY + OSQP"""
+        n = M.shape[0]
 
-        sol = solvers.qp(P, q, G, h, A_eq, b_eq)
+        # Decision variable
+        p = cp.Variable(n)
 
-        if sol['status'] != 'optimal':
-            raise RuntimeError(f"CVXOPT optimization failed: {sol['status']}")
+        objective = cp.Minimize(
+            0.5 * cp.quad_form(p, 2 * M) + (-2 * M @ x) @ p
+        )
 
-        return np.array(sol['x']).flatten()
+        constraints = [
+            p >= 0,
+            cp.sum(p) == 1
+        ]
+
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver=cp.OSQP, verbose=False)
+
+        if prob.status not in ['optimal', 'optimal_inaccurate']:
+            raise RuntimeError(f"CVXPY optimization failed: {prob.status}")
+
+        return p.value
 
     def _cost_aware_objective_factory(self, x, M, prev_portfolio):
         """
