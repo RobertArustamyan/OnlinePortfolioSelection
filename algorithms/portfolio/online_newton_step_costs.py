@@ -23,7 +23,7 @@ class OnlineNewtonStepCosts:
         :param alpha: No-trade threshold. Only rebalance if portfolio change exceeds alpha.
                    Measured as L1 distance: sum(|new_weights - old_weights|)
                    0.0 (no threshold) to 0.1 (10% total change)
-        :param improvment_threshold: Only trade if expected objective improvement exceeds this.
+        :param improvement_threshold: Only trade if expected objective improvement exceeds this.
                                   Measured as reduction in ONS objective function.
                                   Typical range: 0.0 (no threshold) to 0.01
         """
@@ -47,7 +47,15 @@ class OnlineNewtonStepCosts:
         self.A = np.eye(n_stocks)
         self.b = np.zeros(n_stocks)
 
-    @staticmethod
+    def _compute_objective_value(self, portfolio, target, M, prev_portfolio):
+        # Mahalanobis distance term: ||p - x||^2_M
+        deviation = portfolio - target
+        mahalanobis = deviation @ M @ deviation
+        # Transaction cost term: cost(prev, p)
+        transaction_cost = self.cost_model.compute_cost(prev_portfolio, portfolio)
+
+        return mahalanobis + self.cost_penalty * transaction_cost
+
     def _project_to_simplex_standard(self, x, M):
         m = M.shape[0]
         P = matrix(2 * M)
@@ -66,13 +74,12 @@ class OnlineNewtonStepCosts:
 
     def _cost_aware_objective_factory(self, x, M, prev_portfolio):
         """
-        Factory function that creates the cost-aware objective for ANY cost model.
-
-        Returns a function: f(p) = ||p - x||²_M + λ * cost(prev, p)
+        Function that creates the cost-aware objective for existing cost model.
+        returns a function: f(p) = ||p - x||^2_M + lambda * cost(prev, p)
         """
 
         def objective(p):
-            # Mahalanobis distance term: ||p - x||²_M
+            # Mahalanobis distance term: ||p - x||^2_M
             deviation = p - x
             mahalanobis_distance = deviation @ M @ deviation
 
@@ -104,10 +111,9 @@ class OnlineNewtonStepCosts:
 
     def _project_to_simplex_with_costs(self, x, M, prev_portfolio):
         """
-        Generic cost-aware projection that works with ANY cost model.
-        Uses scipy's SLSQP optimizer which can handle arbitrary cost functions.
+        Cost-aware projection
         """
-        # Create objective and gradient functions
+        # create objective and gradient functions
         objective = self._cost_aware_objective_factory(x, M, prev_portfolio)
         gradient = self._cost_aware_gradient_factory(x, M, prev_portfolio)
 
@@ -118,8 +124,6 @@ class OnlineNewtonStepCosts:
 
         # Initial guess
         p0 = self._project_to_simplex_standard(x, M)
-
-        # Optimize with cost awareness
         result = minimize(
             objective,
             p0,
@@ -141,6 +145,7 @@ class OnlineNewtonStepCosts:
         Applies no-trade threshold if alpha > 0.
         """
         # ONS suggested portfolio
+        target_portfolio = self.delta * np.linalg.inv(self.A) @ self.b
         proposed_portfolio = (1 - self.eta) * self.p_t + self.eta * self.p_0
 
         # No-trade threshold
@@ -148,6 +153,19 @@ class OnlineNewtonStepCosts:
             portfolio_change = np.sum(np.abs(proposed_portfolio - self.prev_portfolio))
 
             if portfolio_change < self.alpha:
+                return self.prev_portfolio.copy()
+
+        if self.improvement_threshold > 0:
+            obj_current = self._compute_objective_value(
+                self.prev_portfolio, target_portfolio, self.A, self.prev_portfolio
+            )
+
+            obj_proposed = self._compute_objective_value(
+                proposed_portfolio, target_portfolio, self.A, self.prev_portfolio
+            )
+
+            improvement = obj_current - obj_proposed
+            if improvement < self.improvement_threshold:
                 return self.prev_portfolio.copy()
 
         return proposed_portfolio
@@ -173,7 +191,7 @@ class OnlineNewtonStepCosts:
             self.p_t = self._project_to_simplex_with_costs(q, self.A, self.prev_portfolio)
 
         except (np.linalg.LinAlgError, RuntimeError) as e:
-            print(f"Warning: {type(e).__name__}, using regularization")
+            print(f"Warning: {type(e).__name__}")
 
             A_reg = self.A + 1e-6 * np.eye(self.n_stocks)
 
@@ -184,7 +202,7 @@ class OnlineNewtonStepCosts:
                 self.p_t = self._project_to_simplex_with_costs(q, A_reg, self.prev_portfolio)
 
             except (np.linalg.LinAlgError, RuntimeError) as e2:
-                print(f"Warning: Regularization also failed ({type(e2).__name__}), keeping previous portfolio")
+                print(f"Warning: Regularization failed ({type(e2).__name__}) keeping previous portfolio")
 
     def simulate_trading(self, price_relatives_sequence, verbose=True, verbose_days=100):
         wealth = 1.0
@@ -193,23 +211,40 @@ class OnlineNewtonStepCosts:
         transaction_costs = []
         turnovers = []
         num_no_trades = 0
+        num_alpha_blocks = 0
+        num_improvement_blocks = 0
+
+        # Track why trades were blocked
+        block_reasons = []
 
         for day, r_t in enumerate(price_relatives_sequence):
+            # Get portfolio for current day (with thresholds)
+            prev_prev = self.prev_portfolio.copy()
             portfolio = self.get_portfolio()
 
-            # Check if we actually traded (for statistics)
             actually_traded = not np.allclose(portfolio, self.prev_portfolio)
             if not actually_traded:
                 num_no_trades += 1
+                # Try to determine which threshold blocked
+                portfolio_change = np.sum(np.abs(self.p_t - self.prev_portfolio))
+                if self.alpha > 0 and portfolio_change < self.alpha:
+                    num_alpha_blocks += 1
+                    block_reasons.append('alpha')
+                elif self.improvement_threshold > 0:
+                    num_improvement_blocks += 1
+                    block_reasons.append('improvement')
+                else:
+                    block_reasons.append('other')
+            else:
+                block_reasons.append('traded')
 
-            # Compute transaction cost for this rebalancing
+            # Compute transaction cost for the rebalancing
             tc = self.cost_model.compute_cost(self.prev_portfolio, portfolio)
 
             # Apply transaction cost to wealth
             wealth *= (1 - tc)
             transaction_costs.append(tc)
 
-            # Track turnover (portfolio change)
             turnover = np.sum(np.abs(portfolio - self.prev_portfolio))
             turnovers.append(turnover)
 
@@ -228,7 +263,7 @@ class OnlineNewtonStepCosts:
                 print(f"Day {day + 1}: Wealth = {wealth:.4f}, "
                       f"TC = {transaction_costs[-1]:.6f}, "
                       f"Turnover = {turnover:.4f}, "
-                      f"No-trades so far: {num_no_trades}")
+                      f"No-trades: {num_no_trades} (α:{num_alpha_blocks}, imp:{num_improvement_blocks})")
 
         return {
             'final_wealth': wealth,
@@ -241,6 +276,9 @@ class OnlineNewtonStepCosts:
             'max_turnover': np.max(turnovers),
             'num_days': len(price_relatives_sequence),
             'num_no_trades': num_no_trades,
-            'trade_frequency': 1 - (num_no_trades / len(price_relatives_sequence))
+            'num_alpha_blocks': num_alpha_blocks,
+            'num_improvement_blocks': num_improvement_blocks,
+            'trade_frequency': 1 - (num_no_trades / len(price_relatives_sequence)),
+            'block_reasons': block_reasons
         }
 
