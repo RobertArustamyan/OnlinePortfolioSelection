@@ -13,6 +13,10 @@ class Costs(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def cvxpy_cost(self, prev_weights, new_weights) -> float:
+        raise NotImplementedError
+
+    @abstractmethod
     def gradient(self, prev_weights, new_weights) -> List[float]:
         raise NotImplementedError
 
