@@ -4,7 +4,7 @@ import cvxpy as cp
 from algorithms.transactions.cost import Costs
 
 
-class InteractiveBrokersCostUSDTiered(Costs):
+class InteractiveBrokersCostUSD(Costs):
     """
     Dynamic version that tracks actual wealth growth over time.
 
@@ -12,7 +12,7 @@ class InteractiveBrokersCostUSDTiered(Costs):
     providing more accurate commission calculations.
     """
 
-    def __init__(self, initial_capital):
+    def __init__(self, initial_capital, pricing_type):
         """
         Args:
             initial_capital: Starting dollar amount
@@ -21,11 +21,25 @@ class InteractiveBrokersCostUSDTiered(Costs):
         self.initial_capital = initial_capital
         self.current_wealth_fraction = 1.0
         self.stock_prices = None
+        self.pricing_type = pricing_type.lower()
 
-        # IB Tiered pricing parameters
-        self.cost_per_share = 0.0035
-        self.min_per_order = 0.35
+        if self.pricing_type not in ["tiered", "fixed"]:
+            raise ValueError(f"pricing_type must be 'tiered' or 'fixed', got '{pricing_type}'")
+
+        if self.pricing_type == "fixed":
+            self.cost_per_share = 0.005
+            self.min_per_order = 1.00
+        else:
+            self.cost_per_share = 0.0035
+            self.min_per_order = 0.35
+
+        # Fractional share pricing
+        self.fractional_min = 0.01  # $0.01 minimum for fractional shares
+        self.fractional_rate = 0.01  # 1% of trade value for fractional shares
+
         self.max_pct_per_order = 0.01
+        self.max_per_trade = 8.30 # $8.30 maximum per trade
+
 
     def update_state(self, wealth_fraction, stock_prices):
         self.stock_prices = np.array(stock_prices)
@@ -63,16 +77,24 @@ class InteractiveBrokersCostUSDTiered(Costs):
                 continue
 
             trade_value = shares_traded[i] * self.stock_prices[i]
+            if shares_traded[i] < 1.0:
+                # Fractional share case
+                commission = max(self.fractional_min, self.fractional_rate * trade_value)
+            else:
 
-            # Per-share commission
-            per_share_commission = shares_traded[i] * self.cost_per_share
+                # Per-share commission
+                per_share_commission = shares_traded[i] * self.cost_per_share
 
-            # Apply minimum
-            commission = max(per_share_commission, self.min_per_order)
+                # Apply minimum
+                commission = max(per_share_commission, self.min_per_order)
 
             # Apply 1% cap
-            max_commission = self.max_pct_per_order * trade_value
-            commission = min(commission, max_commission)
+            max_by_pct = self.max_pct_per_order * trade_value
+            commission = min(commission, max_by_pct)
+
+            # Apply 8.30$ per-trade maximum
+            commission = min(commission, self.max_per_trade)
+
 
             total_commission += commission
 
