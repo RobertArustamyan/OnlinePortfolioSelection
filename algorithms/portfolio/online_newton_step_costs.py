@@ -193,6 +193,9 @@ class OnlineNewtonStepCosts:
             if improvement < self.improvement_threshold:
                 return self.prev_portfolio.copy()
 
+        # if np.allclose(proposed_portfolio, self.prev_portfolio):
+        #     return self.prev_portfolio
+
         return proposed_portfolio
 
     def update(self, r_t, p_used):
@@ -229,7 +232,7 @@ class OnlineNewtonStepCosts:
             except (np.linalg.LinAlgError, RuntimeError) as e2:
                 print(f"Warning: Regularization failed ({type(e2).__name__}) keeping previous portfolio")
 
-    def simulate_trading(self, price_relatives_sequence, verbose=True, verbose_days=100):
+    def simulate_trading(self, price_relatives_sequence, stock_prices_sequence=None, verbose=True, verbose_days=100):
         wealth = 1.0
         daily_wealth = [1.0]
         portfolios_used = []
@@ -243,8 +246,14 @@ class OnlineNewtonStepCosts:
         block_reasons = []
 
         for day, r_t in enumerate(price_relatives_sequence):
+            if hasattr(self.cost_model, 'update_state'):
+                if stock_prices_sequence is not None:
+                    day_prices = stock_prices_sequence[day]
+                else:
+                    raise ValueError("Something went wrong in hasattr if statement")
+                self.cost_model.update_state(wealth_fraction=wealth, stock_prices=day_prices)
+
             # Get portfolio for current day (with thresholds)
-            prev_prev = self.prev_portfolio.copy()
             portfolio = self.get_portfolio()
 
             actually_traded = not np.allclose(portfolio, self.prev_portfolio)
