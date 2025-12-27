@@ -193,9 +193,6 @@ class OnlineNewtonStepCosts:
             if improvement < self.improvement_threshold:
                 return self.prev_portfolio.copy()
 
-        # if np.allclose(proposed_portfolio, self.prev_portfolio):
-        #     return self.prev_portfolio
-
         return proposed_portfolio
 
     def update(self, r_t, p_used):
