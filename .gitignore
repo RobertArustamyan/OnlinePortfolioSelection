@@ -10,3 +10,7 @@ get_project_structure.py
 
 algorithms/portfolio/r_universal_modified.py
 experiments/portfolio/universal_portfolio_modified.py
+
+TODO.md
+
+results/portfolio/WithCosts/ONS/TrainingTimeAnalysis
