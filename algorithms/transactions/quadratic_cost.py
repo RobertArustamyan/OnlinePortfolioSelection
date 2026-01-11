@@ -11,6 +11,9 @@ class QuadraticCost(Costs):
     def compute_cost(self, prev_weights, new_weights):
         return self.lambda_param * np.sum((new_weights - prev_weights) ** 2)
 
+    def cvxpy_cost(self, prev_weights, new_weights) -> float:
+        return self.lambda_param * cp.sum((new_weights - prev_weights) ** 2)
+
     def compute_gradient(self, prev_weights, new_weights):
         return self.lambda_param * cp.sum((new_weights - prev_weights) ** 2)
 
