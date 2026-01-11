@@ -10,26 +10,25 @@ from matplotlib import colors
 class ResultsPlotter:
     """Class for creating performance analysis plots for portfolio experiments"""
 
-    def __init__(self, results, model_name):
+    def __init__(self, results, model_name, detailed_results=None):
         """
         Initialize the plotter with experiment results
 
-        Args:
-            results: List of result dictionaries from experiments
-            model_name: Name of the cost model
+        results: List of result dictionaries from experiments
+        model_name: Name of the cost model
         """
         self.results = results
         self.model_name = model_name
         self.df = pd.DataFrame(results)
         self.df['model'] = model_name
+        self.detailed_results = detailed_results
 
     def plot_all(self, save_path=None, bah_results=None):
         """
         Create all plots (2x2 grid)
 
-        Args:
-            save_path: Path to save the plot (optional)
-            bah_results: Buy and hold daily wealth array for comparison (optional)
+        save_path: Path to save the plot (optional)
+        bah_results: Buy and hold daily wealth array for comparison (optional)
         """
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
         fig.suptitle(f'{self.model_name} - Performance Analysis', fontsize=16, fontweight='bold')
@@ -246,6 +245,111 @@ class ResultsPlotter:
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Comparison plot saved to: {save_path}")
+
+        plt.show()
+        plt.close()
+
+    def plot_portfolio(self, index, ticker_names, save_path=None):
+        """
+        Visualize portfolio allocation at a specific day using polar chart
+
+
+        index: Day index to visualize
+        ticker_names: List of ticker names corresponding to portfolio positions
+        save_path: Path to save the plot (optional)
+        """
+        if self.detailed_results is None:
+            raise ValueError("No detailed results available. Initialize ResultsPlotter with detailed_results.")
+
+        portfolio_to_plot = self.detailed_results['testing']['portfolios_used'][index]
+
+        fig = plt.figure(figsize=(10, 8))
+        ax = plt.subplot(111, projection='polar')
+
+        theta = np.linspace(0, 2 * np.pi, len(ticker_names), endpoint=False)
+        width = 2 * np.pi / len(ticker_names)
+        colors = plt.cm.Set3(np.linspace(0, 1, len(ticker_names)))
+
+        bars = ax.bar(theta, portfolio_to_plot, width=width, color=colors,
+                      alpha=0.8, edgecolor='black', linewidth=1.5)
+
+        ax.set_xticks(theta)
+        ax.set_xticklabels(ticker_names, fontsize=11, weight='bold')
+        ax.set_ylim(0, max(portfolio_to_plot) * 1.2)
+        ax.set_title(f'Portfolio Allocation - Day {index}\n{self.model_name}',
+                     fontsize=14, fontweight='bold', pad=20)
+
+        # Add percentage labels
+        for angle, weight, ticker in zip(theta, portfolio_to_plot, ticker_names):
+            ax.text(angle, weight + max(portfolio_to_plot) * 0.05,
+                    f'{weight * 100:.1f}%',
+                    ha='center', va='bottom', fontsize=9, weight='bold')
+
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Portfolio visualization saved to: {save_path}")
+
+        plt.show()
+        plt.close()
+
+    def plot_portfolio_evolution(self, ticker_names, save_path=None, sample_days=None):
+        """
+        Visualize how portfolio allocation changes over time
+        Shows multiple polar charts in one figure
+
+        ticker_names: List of ticker names
+        save_path: Path to save the plot
+        sample_days: List of specific days to plot
+        """
+        if self.detailed_results is None:
+            raise ValueError("No detailed results available.")
+
+        portfolios = self.detailed_results['testing']['portfolios_used']
+        n_days = len(portfolios)
+
+        # Sample days if not specified
+        if sample_days is None:
+            if n_days <= 10:
+                sample_days = list(range(n_days))
+            else:
+                sample_days = [0, n_days // 4, n_days // 2, 3 * n_days // 4, n_days - 1]
+
+        n_samples = len(sample_days)
+        fig = plt.figure(figsize=(5 * n_samples, 5))
+
+        colors = plt.cm.Set3(np.linspace(0, 1, len(ticker_names)))
+
+        theta = np.linspace(0, 2 * np.pi, len(ticker_names), endpoint=False)
+        width = 2 * np.pi / len(ticker_names)
+
+        for idx, day in enumerate(sample_days, 1):
+            ax = fig.add_subplot(1, n_samples, idx, projection='polar')
+            portfolio = portfolios[day]
+
+            bars = ax.bar(theta, portfolio, width=width, color=colors,
+                          alpha=0.8, edgecolor='black', linewidth=1.5)
+
+            ax.set_xticks(theta)
+            ax.set_xticklabels(ticker_names, fontsize=11, weight='bold')
+            ax.set_ylim(0, max(portfolio) * 1.2)
+            ax.set_title(f'Day {day}', fontsize=12, fontweight='bold')
+
+            # Add percentage labels
+            for angle, weight in zip(theta, portfolio):
+                ax.text(angle, weight + max(portfolio) * 0.05,
+                        f'{weight * 100:.1f}%',
+                        ha='center', va='bottom', fontsize=9, weight='bold')
+
+        fig.suptitle(f'Portfolio Evolution - {self.model_name}',
+                     fontsize=16, fontweight='bold', y=1.02)
+
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Portfolio evolution plot saved to: {save_path}")
 
         plt.show()
         plt.close()
