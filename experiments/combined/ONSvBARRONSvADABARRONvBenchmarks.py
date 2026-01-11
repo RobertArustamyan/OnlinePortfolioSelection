@@ -15,7 +15,7 @@ if __name__ == '__main__':
 
     data_dict = prepare_stock_data(
         stocks=["AAPL", "NVDA", "MSFT", "AMZN"],
-        train_days=7100,
+        train_days=5100,
         test_days=2000
     )
 

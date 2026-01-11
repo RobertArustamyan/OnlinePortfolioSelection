@@ -3,19 +3,19 @@ from datetime import datetime, timedelta
 import numpy as np
 import yfinance as yf
 
-from benchmarks.portfolio.compare_strategies import compare_strategies
+from utils.compare_strategies import compare_strategies
 from algorithms.portfolio.r_universal import RUniversalPortfolio
 
 if __name__ == '__main__':
     # Settings for saving results
-    save_plot = True
+    save_plot = False
     path = '../../plots/portfolio'
     fig_name = '6_stocks_2train_1test'
 
     # Flag to control wealth continuation
     continue_wealth_from_training = True
 
-    stocks = ["AAPL", "NVDA", "MSFT", "GOOGL"]
+    stocks = ["AAPL", "NVDA", "MSFT", "AMZN"]
 
     # Define time periods
     end_date = datetime.now()
@@ -43,7 +43,7 @@ if __name__ == '__main__':
         delta_0=1e-6,
         use_damping=False,
         use_parallel=True,
-        n_processes=16
+        n_processes=16,
     )
 
     print("\nTraining\n")
