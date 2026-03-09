@@ -11,6 +11,14 @@ solvers.options['show_progress'] = False
 
 class OnlineNewtonStep:
     def __init__(self, n_stocks, eta, beta, delta):
+        """
+        Online Newton Step algorithm
+
+        :param n_stocks: Number of stocks
+        :param eta: Mixing parameter
+        :param beta: Learning rate parameter
+        :param delta: Regularization parameter
+        """
         self.n_stocks = n_stocks
         self.eta = eta
         self.beta = beta
@@ -43,11 +51,17 @@ class OnlineNewtonStep:
         return np.array(sol['x']).flatten()
 
     def get_portfolio(self):
-        """Return mixed portfolio for trading"""
+        """Return mixed portfolio"""
         return (1 - self.eta) * self.p_t + self.eta * self.p_0
 
     def update(self, r_t, p_used):
-        """Update algorithm state after observing price relatives r_t"""
+        """
+        Update algorithm state after observing price relatives r_t
+
+        :param r_t: price relative
+        :param p_used: previous portfolio (already used)
+        """
+
         # Compute gradient
         wealth = np.dot(p_used, r_t)
 
@@ -81,6 +95,13 @@ class OnlineNewtonStep:
                 print(f"Warning: Regularization also failed ({type(e2).__name__}), keeping previous portfolio")
 
     def simulate_trading(self, price_relatives_sequence, verbose=True, verbose_days=100):
+        """
+        Simulate trading over a sequence of price relatives
+
+        :param price_relatives_sequence:
+        :param verbose: Print details (days, wealth, parameters)
+        :param verbose_days: number of days to repeat verbose
+        """
         wealth = 1.0
         daily_wealth = [1.0]
         portfolios_used = []

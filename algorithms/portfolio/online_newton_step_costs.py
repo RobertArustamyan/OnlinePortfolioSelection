@@ -5,17 +5,17 @@ https://www.schapire.net/papers/newton_portfolios.pdf
 import numpy as np
 from scipy.optimize import minimize
 from cvxopt import matrix, solvers
-import cvxpy as cp  # ADD THIS
+import cvxpy as cp
 
 solvers.options['show_progress'] = False
 
 
 class OnlineNewtonStepCosts:
-    def __init__(self, n_stocks, eta, beta, delta, cost_model, cost_penalty=1.0,alpha=0.0, improvement_threshold=0.0):
+    def __init__(self, n_stocks, eta, beta, delta, cost_model, cost_penalty=1.0, alpha=0.0):
         """
         Cost-aware Online Newton Step algorithm.
         :param n_stocks: Number of stocks
-        :param eta: Mixing parameter (typically small, e.g., 0.05)
+        :param eta: Mixing parameter
         :param beta: Learning rate parameter
         :param delta: Regularization parameter
         :param cost_model: Transaction cost model
@@ -23,10 +23,6 @@ class OnlineNewtonStepCosts:
                          Higher = more conservative trading
         :param alpha: No-trade threshold. Only rebalance if portfolio change exceeds alpha.
                    Measured as L1 distance: sum(|new_weights - old_weights|)
-                   0.0 (no threshold) to 0.1 (10% total change)
-        :param improvement_threshold: Only trade if expected objective improvement exceeds this.
-                                  Measured as reduction in ONS objective function.
-                                  Typical range: 0.0 (no threshold) to 0.01
         """
         self.n_stocks = n_stocks
         self.eta = eta
@@ -35,7 +31,6 @@ class OnlineNewtonStepCosts:
         self.cost_model = cost_model
         self.cost_penalty = cost_penalty
         self.alpha = alpha
-        self.improvement_threshold = improvement_threshold
 
         # Uniform initial portfolio
         self.p_0 = np.ones(n_stocks) / n_stocks
@@ -48,6 +43,11 @@ class OnlineNewtonStepCosts:
         self.A = np.eye(n_stocks)
         self.b = np.zeros(n_stocks)
 
+        self.A_history = []
+        self.b_history = []
+        self.mahalanobis_history = []
+        self.objective_history = []
+
     def _compute_objective_value(self, portfolio, target, M, prev_portfolio):
         # Mahalanobis distance term: ||p - x||^2_M
         deviation = portfolio - target
@@ -57,24 +57,12 @@ class OnlineNewtonStepCosts:
 
         return mahalanobis + self.cost_penalty * transaction_cost
 
-    # def _project_to_simplex_standard(self, x, M):
-    #     m = M.shape[0]
-    #     P = matrix(2 * M)
-    #     q = matrix(-2 * M @ x)
-    #     G = matrix(-np.eye(m))
-    #     h = matrix(np.zeros((m, 1)))
-    #     A_eq = matrix(np.ones((1, m)))
-    #     b_eq = matrix(1.0)
-    #
-    #     sol = solvers.qp(P, q, G, h, A_eq, b_eq)
-    #
-    #     if sol['status'] != 'optimal':
-    #         raise RuntimeError(f"CVXOPT optimization failed: {sol['status']}")
-    #
-    #     return np.array(sol['x']).flatten()
-
     def _project_to_simplex_standard(self, x, M):
-        """Project onto simplex using CVXPY + OSQP"""
+        """
+
+        :param x:
+        :param M:
+        """
         n = M.shape[0]
 
         # Decision variable
@@ -112,7 +100,10 @@ class OnlineNewtonStepCosts:
             transaction_cost = self.cost_model.compute_cost(prev_portfolio, p)
 
             # Combined objective
-            return mahalanobis_distance + self.cost_penalty * transaction_cost
+            # THIS PART IS TESTING!
+            scale = np.trace(M)
+            #
+            return (1 / scale) * mahalanobis_distance + self.cost_penalty * transaction_cost
 
         return objective
 
@@ -121,9 +112,9 @@ class OnlineNewtonStepCosts:
         Factory function for gradient of cost-aware objective.
         Uses numerical differentiation for cost gradient.
         """
-
+        scale = np.trace(M)
         def gradient(p):
-            mahalanobis_grad = 2 * M @ (p - x)
+            mahalanobis_grad = (2 / scale) * M @ (p - x)
 
             try:
                 cost_grad = self.cost_model.gradient(prev_portfolio, p)
@@ -156,7 +147,7 @@ class OnlineNewtonStepCosts:
             jac=gradient,
             bounds=bounds,
             constraints=constraints,
-            options={'ftol': 1e-9, 'maxiter': 1000}
+            options={'ftol': 1e-6, 'maxiter': 10000}
         )
 
         if result.success:
@@ -180,23 +171,15 @@ class OnlineNewtonStepCosts:
             if portfolio_change < self.alpha:
                 return self.prev_portfolio.copy()
 
-        if self.improvement_threshold > 0:
-            obj_current = self._compute_objective_value(
-                self.prev_portfolio, target_portfolio, self.A, self.prev_portfolio
-            )
-
-            obj_proposed = self._compute_objective_value(
-                proposed_portfolio, target_portfolio, self.A, self.prev_portfolio
-            )
-
-            improvement = obj_current - obj_proposed
-            if improvement < self.improvement_threshold:
-                return self.prev_portfolio.copy()
-
         return proposed_portfolio
 
     def update(self, r_t, p_used):
-        """Update algorithm state after observing price relatives r_t"""
+        """
+        Update algorithm state after observing price relatives r_t
+
+        :param r_t: price relative
+        :param p_used: previous portfolio (already used)
+        """
         # Compute gradient
         wealth = np.dot(p_used, r_t)
 
@@ -230,6 +213,14 @@ class OnlineNewtonStepCosts:
                 print(f"Warning: Regularization failed ({type(e2).__name__}) keeping previous portfolio")
 
     def simulate_trading(self, price_relatives_sequence, stock_prices_sequence=None, verbose=True, verbose_days=100):
+        """
+        Simulate trading over a sequence of price relatives
+
+        :param price_relatives_sequence:price relatives of stocks used for trading
+        :param stock_prices_sequence: prices of stocks used for trading
+        :param verbose: Print details (days, wealth, parameters)
+        :param verbose_days: number of days to repeat verbose
+        """
         wealth = 1.0
         daily_wealth = [1.0]
         portfolios_used = []
@@ -238,8 +229,6 @@ class OnlineNewtonStepCosts:
         num_no_trades = 0
         num_alpha_blocks = 0
         num_improvement_blocks = 0
-
-        # Track why trades were blocked
         block_reasons = []
 
         for day, r_t in enumerate(price_relatives_sequence):
@@ -253,6 +242,15 @@ class OnlineNewtonStepCosts:
             # Get portfolio for current day (with thresholds)
             portfolio = self.get_portfolio()
 
+            # Metrics used for visualisation only!
+            self.A_history.append(self.A.copy())
+            self.b_history.append(self.b.copy())
+            target_portfolio = self.delta * np.linalg.inv(self.A) @ self.b
+            deviation = portfolio - target_portfolio
+            mahalanobis = deviation @ self.A @ deviation
+            self.mahalanobis_history.append(mahalanobis)
+
+
             actually_traded = not np.allclose(portfolio, self.prev_portfolio)
             if not actually_traded:
                 num_no_trades += 1
@@ -261,9 +259,6 @@ class OnlineNewtonStepCosts:
                 if self.alpha > 0 and portfolio_change < self.alpha:
                     num_alpha_blocks += 1
                     block_reasons.append('alpha')
-                elif self.improvement_threshold > 0:
-                    num_improvement_blocks += 1
-                    block_reasons.append('improvement')
                 else:
                     block_reasons.append('other')
             else:
@@ -294,7 +289,7 @@ class OnlineNewtonStepCosts:
                 print(f"Day {day + 1}: Wealth = {wealth:.4f}, "
                       f"TC = {transaction_costs[-1]:.6f}, "
                       f"Turnover = {turnover:.4f}, "
-                      f"No-trades: {num_no_trades} (α:{num_alpha_blocks}, imp:{num_improvement_blocks})")
+                      f"No-trades: {num_no_trades} (alpha:{num_alpha_blocks}, imp:{num_improvement_blocks})")
 
         return {
             'final_wealth': wealth,
@@ -310,6 +305,8 @@ class OnlineNewtonStepCosts:
             'num_alpha_blocks': num_alpha_blocks,
             'num_improvement_blocks': num_improvement_blocks,
             'trade_frequency': 1 - (num_no_trades / len(price_relatives_sequence)),
-            'block_reasons': block_reasons
+            'block_reasons': block_reasons,
+            'A_history': self.A_history,
+            'b_history': self.b_history,
+            'mahalanobis_history': self.mahalanobis_history
         }
-

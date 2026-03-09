@@ -4,23 +4,18 @@ import cvxpy as cp
 
 class BarronsCosts:
     def __init__(self, n_stocks, T, beta, eta, cost_model, cost_penalty=1.0,
-                 alpha=0.0, improvement_threshold=0.0):
+                 alpha=0.0, optimization_method='linear'):
         """
-        Cost-aware Barrons algorithm.
+        Cost-aware BARRONS algorithm.
 
         :param n_stocks: Number of stocks
         :param T: Time horizon
         :param beta: Regularization parameter
         :param eta: Learning rate parameter
         :param cost_model: Transaction cost model
-        :param cost_penalty: Weight for transaction cost in optimization
-                         Higher = more conservative trading
-        :param alpha: No-trade threshold. Only rebalance if portfolio change exceeds alpha.
-                   Measured as L1 distance: sum(|new_weights - old_weights|)
-                   0.0 (no threshold) to 0.1 (10% total change)
-        :param improvement_threshold: Only trade if expected objective improvement exceeds this.
-                                  Measured as reduction in Barrons objective function.
-                                  Typical range: 0.0 (no threshold) to 0.01
+        :param cost_penalty: Weight for transaction cost (higher = more conservative)
+        :param alpha: No-trade threshold (L1 distance)
+        :param optimization_method: 'linear', 'quadratic', or 'sqp'
         """
         self.n_stocks = n_stocks
         self.T = T
@@ -29,7 +24,7 @@ class BarronsCosts:
         self.cost_model = cost_model
         self.cost_penalty = cost_penalty
         self.alpha = alpha
-        self.improvement_threshold = improvement_threshold
+        self.opt_method = optimization_method
         self._check_parameters()
 
         self.x_min = 1 / (n_stocks * T)
@@ -48,7 +43,7 @@ class BarronsCosts:
 
     def _check_parameters(self):
         """
-        Checks algorithm parameters validity
+        Validate algorithm parameters.
         """
         if self.beta <= 0 or self.beta > 0.5:
             raise ValueError(f"Invalid beta value: {self.beta}")
@@ -57,8 +52,9 @@ class BarronsCosts:
 
     def get_portfolio(self):
         """
-        Return portfolio for trading.
-        Applies no-trade threshold if alpha > 0.
+        Return portfolio for trading with no-trade threshold applied.
+
+        :return: Portfolio weights
         """
         proposed_portfolio = self.x_t.copy()
 
@@ -69,24 +65,23 @@ class BarronsCosts:
             if portfolio_change < self.alpha:
                 return self.prev_portfolio.copy()
 
-        # Improvement threshold
-        if self.improvement_threshold > 0:
-            # Compute current objective value (staying with prev_portfolio)
-            obj_current = self._psi(self.prev_portfolio)
-
-            # Compute proposed objective value
-            obj_proposed = self._psi(proposed_portfolio)
-
-            improvement = obj_current - obj_proposed
-            if improvement < self.improvement_threshold:
-                return self.prev_portfolio.copy()
-
         return proposed_portfolio
 
     def _calculate_loss(self, r_t):
+        """
+        Calculate logarithmic loss.
+
+        :param r_t: Price relatives
+        :return: Negative log return
+        """
         return -np.log(np.dot(self.x_t, r_t))
 
     def _compute_eta_t(self):
+        """
+        Compute adaptive learning rates based on allocation history.
+
+        :return: Adaptive learning rates
+        """
         portfolio_hist = np.array(self.portfolios_used)
         values = 1.0 / (self.n_stocks * portfolio_hist)
 
@@ -96,6 +91,12 @@ class BarronsCosts:
         return self.eta * np.exp(max_values)
 
     def _psi(self, x):
+        """
+        Compute mixture regularizer.
+
+        :param x: Portfolio weights
+        :return: Regularizer value
+        """
         x = np.asarray(x)
 
         first_term = (0.5 * self.beta) * (x @ self.A @ x)
@@ -104,6 +105,12 @@ class BarronsCosts:
         return first_term + second_term
 
     def _grad_psi(self, x):
+        """
+        Compute gradient of regularizer.
+
+        :param x: Portfolio weights
+        :return: Gradient
+        """
         x = np.asarray(x)
 
         first_term = self.beta * (self.A @ x)
@@ -112,6 +119,13 @@ class BarronsCosts:
         return first_term + second_term
 
     def _bregman_divergence(self, x, y):
+        """
+        Compute Bregman divergence.
+
+        :param x: First portfolio
+        :param y: Second portfolio
+        :return: Bregman divergence
+        """
         grad_y = self._grad_psi(y)
         psi_x = self._psi(x)
         psi_y = self._psi(y)
@@ -120,9 +134,14 @@ class BarronsCosts:
 
     def _solve_ipm_with_costs(self, grad_t):
         """
-        Solve the interior point method optimization with transaction costs.
+        Solve optimization with transaction costs.
         Minimizes: linear_term @ x + psi(x) + cost_penalty * cost(prev, x)
+
+        :param grad_t: Loss gradient
+        :return: Optimal portfolio weights
         """
+        if self.opt_method == 'sqp':
+            return self._solve_with_sqp(grad_t)
         n = self.n_stocks
         x = cp.Variable(n)
 
@@ -135,8 +154,12 @@ class BarronsCosts:
 
         linear_term = grad_t - grad_psi_xt
 
-        cost_expr = self.cost_model.cvxpy_cost_linearized(prev_portfolio=self.prev_portfolio,
-                                                          new_portfolio_point=self.x_t, x_var=x)
+        if self.opt_method is None or self.opt_method == 'linear':
+            cost_expr = self.cost_model.cvxpy_cost_linearized(prev_portfolio=self.prev_portfolio,
+                                                              new_portfolio_point=self.x_t, x_var=x)
+        elif self.opt_method == 'quadratic':
+            cost_expr = self.cost_model.cvxpy_cost_quadratic(prev_portfolio=self.prev_portfolio,
+                                                             new_portfolio_point=self.x_t, x_var=x)
 
         objective = cp.Minimize(linear_term @ x + psi_expr + self.cost_penalty * cost_expr)
 
@@ -152,7 +175,65 @@ class BarronsCosts:
         x_val /= x_val.sum()
         return x_val
 
+    def _solve_with_sqp(self, grad_t, max_iter=7, tol=1e-4):
+        """
+        Sequential Quadratic Programming solver with iterative cost approximation.
+
+        :param grad_t: Loss gradient
+        :param max_iter: Maximum iterations
+        :param tol: Convergence tolerance
+        :return: Optimized portfolio weights
+        """
+        x_current = self.x_t.copy()
+
+        for iteration in range(max_iter):
+            # Build quadratic approximation at current point
+            cost_value = self.cost_model.compute_cost(self.prev_portfolio, x_current)
+            cost_grad = self.cost_model.numerical_gradient(self.prev_portfolio, x_current)
+            cost_hessian = self.cost_model.numerical_hessian(self.prev_portfolio, x_current)
+
+            # Solve QP subproblem
+            x = cp.Variable(self.n_stocks)
+
+            # Original Barrons terms
+            grad_psi_xt = self._grad_psi(x_current)
+            quad_term = 0.5 * self.beta * cp.quad_form(x, self.A)
+            ent_term_lin = cp.sum(cp.multiply(-1.0 / (self.eta_t * x_current), x - x_current))
+            psi_expr = quad_term + ent_term_lin
+
+            linear_term = grad_t - grad_psi_xt
+
+            # Quadratic cost approximation
+            diff = x - x_current
+            cost_expr = cost_value + cost_grad @ diff + 0.5 * cp.quad_form(diff, cost_hessian)
+
+            objective = cp.Minimize(linear_term @ x + psi_expr + self.cost_penalty * cost_expr)
+            constraints = [cp.sum(x) == 1, x >= self.x_min]
+
+            prob = cp.Problem(objective, constraints)
+            prob.solve(solver=cp.CVXOPT, verbose=False)
+
+            if prob.status not in ['optimal', 'optimal_inaccurate']:
+                break
+
+            x_new = x.value
+            x_new = np.maximum(x_new, self.x_min)
+            x_new /= x_new.sum()
+
+            # Check convergence
+            if np.linalg.norm(x_new - x_current) < tol:
+                break
+
+            x_current = x_new
+
+        return x_current
+
     def update(self, r_t):
+        """
+        Update algorithm state with new price relatives.
+
+        :param r_t: Price relatives
+        """
         x_used = self.portfolios_used[-1]
         grad_t = -r_t / np.dot(x_used, r_t)
 
@@ -162,6 +243,15 @@ class BarronsCosts:
         self.x_t = self._solve_ipm_with_costs(grad_t)
 
     def simulate_trading(self, price_relatives_sequence, stock_prices_sequence=None, verbose=True, verbose_days=100):
+        """
+        Simulate trading with transaction costs.
+
+        :param price_relatives_sequence: Sequence of price relatives
+        :param stock_prices_sequence: Sequence of stock prices (for cost model)
+        :param verbose: Print progress
+        :param verbose_days: Print frequency
+        :return: Dictionary with trading results and cost statistics
+        """
         wealth = 1.0
         daily_wealth = [1.0]
         transaction_costs = []
@@ -174,9 +264,9 @@ class BarronsCosts:
         for day, r_t in enumerate(price_relatives_sequence):
             if hasattr(self.cost_model, 'update_state'):
                 if stock_prices_sequence is not None:
-                    day_prices = stock_prices_sequence[day]  # need checking
+                    day_prices = stock_prices_sequence[day]
                 else:
-                    raise ValueError("Something went wrong in hasattr if statement")
+                    raise ValueError("Stock prices required for cost model update")
                 self.cost_model.update_state(wealth_fraction=wealth, stock_prices=day_prices)
 
             # Get portfolio for current day (with thresholds)
@@ -185,14 +275,11 @@ class BarronsCosts:
             actually_traded = not np.allclose(portfolio, self.prev_portfolio)
             if not actually_traded:
                 num_no_trades += 1
-                # Try to determine which threshold blocked
+                # Determine which threshold blocked
                 portfolio_change = np.sum(np.abs(self.x_t - self.prev_portfolio))
                 if self.alpha > 0 and portfolio_change < self.alpha:
                     num_alpha_blocks += 1
                     block_reasons.append('alpha')
-                elif self.improvement_threshold > 0:
-                    num_improvement_blocks += 1
-                    block_reasons.append('improvement')
                 else:
                     block_reasons.append('other')
             else:
@@ -200,10 +287,8 @@ class BarronsCosts:
 
             self.portfolios_used.append(portfolio.copy())
 
-            # Compute transaction cost for the rebalancing
+            # Compute transaction cost
             tc = self.cost_model.compute_cost(self.prev_portfolio, portfolio)
-
-            # Apply transaction cost to wealth
             wealth *= (1 - tc)
             transaction_costs.append(tc)
 

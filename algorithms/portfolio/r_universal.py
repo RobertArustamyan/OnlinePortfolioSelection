@@ -21,7 +21,7 @@ class RUniversalPortfolio:
         :param delta: Grid spacing
         :param delta_0: Minimum coordinate value
         :param use_damping: If True, use Q_t (with damping); if False, use P_t
-        :param n_processes: # of paralel processes
+        :param n_processes: number of parallel processes
         :param use_parallel: Enable multiprocessing
         :param verbose: For portfolio/wealth tracing
         '''

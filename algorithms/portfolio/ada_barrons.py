@@ -1,3 +1,7 @@
+"""
+https://arxiv.org/pdf/1805.07430
+"""
+
 import numpy as np
 import cvxpy as cp
 
@@ -5,6 +9,12 @@ from algorithms.portfolio.barrons import Barrons
 
 class AdaBarrons:
     def __init__(self, n_stocks, T):
+        """
+        Ada-Barrons algorithm.
+
+        :param n_stocks: Number of stocks
+        :param T: Time horizon
+        """
         self.n_stocks = n_stocks
         self.T = T
         self.eta = 1.0 / (2048 * n_stocks * (np.log(T)**2))
@@ -23,14 +33,15 @@ class AdaBarrons:
         self.observed_portfolios = []
 
     def _compute_u_t(self):
+        """
+        Compute the hindsight-optimal portfolio u_t.
+        :return: Optimal portfolio u_t as a numpy array
+        """
         if len(self.observed_price_relatives) == 0:
             print("entered comput_u_t function without loss")
             return np.ones(self.n_stocks) / self.n_stocks
 
-        n = self.n_stocks
-        u = cp.Variable(n)
-
-        loss_term = 0
+        u = cp.Variable(self.n_stocks)
 
         R = np.array(self.observed_price_relatives)
         loss_term = -cp.sum(cp.log(R @ u))
@@ -77,6 +88,12 @@ class AdaBarrons:
                     return np.ones(self.n_stocks) / self.n_stocks
 
     def _compute_alpha_t(self, u_t):
+        """
+        Compute the adaptive step-size upper bound alpha_t. Is used to decide whether the current beta value
+        is still valid or a restart is needed.
+
+        :param u_t: Hindsight-optimal portfolio computed
+        """
         if len(self.observed_price_relatives) == 0:
             print("Entered compute_alpha_t function without loss")
             return 0.5
@@ -107,6 +124,10 @@ class AdaBarrons:
         return self.barrons.get_portfolio()
 
     def _check_restart_condition(self):
+        """
+        Checks if the algorithm restart condition is satisfied (if yes, makes beta = beta / 2 and restarts)
+        :return: true if condition satisfied false otherwise
+        """
         if len(self.observed_price_relatives) == 0:
             print("entered restart condition without loss")
             return False
@@ -117,6 +138,9 @@ class AdaBarrons:
         return self.beta > alpha_t
 
     def _restart_barrons(self):
+        """
+        Updates parameters and resets algorithm with new parameters, when the condition satisfied
+        """
         self.beta = self.beta / 2.0
         self.barrons = Barrons(n_stocks=self.n_stocks, T=self.T, beta=self.beta, eta=self.eta)
 
@@ -125,6 +149,12 @@ class AdaBarrons:
         self.restart_count += 1
 
     def update(self, r_t, x_used):
+        """
+        Update after new price relatives (new day)
+
+        :param r_t: price relatives
+        :param x_used: previous portfolio
+        """
         self.observed_price_relatives.append(r_t.copy())
         self.observed_portfolios.append(x_used.copy())
 
@@ -136,7 +166,13 @@ class AdaBarrons:
             self._restart_barrons()
 
     def simulate_trading(self, price_relatives_sequence, verbose=True, verbose_days=100):
-        """Simulate trading over a sequence of price relatives"""
+        """
+        Simulate trading over a sequence of price relatives
+
+        :param price_relatives_sequence:
+        :param verbose: Print details (days, wealth, parameters)
+        :param verbose_days: number of days to repeat verbose
+        """
         wealth = 1.0
         daily_wealth = [1.0]
 
