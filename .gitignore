@@ -13,4 +13,10 @@ experiments/portfolio/universal_portfolio_modified.py
 
 TODO.md
 
-results/portfolio/WithCosts/ONS/TrainingTimeAnalysis
+# Ignore all folders in results besides .gitkeep files
+
+/results/portfolio/WithCosts/*
+!/results/portfolio/WithCosts/AdaBARRONS/.gitkeep
+!/results/portfolio/WithCosts/BARRONS/.gitkeep
+!/results/portfolio/WithCosts/ONS/.gitkeep
+
