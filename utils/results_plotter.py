@@ -10,22 +10,26 @@ from matplotlib import colors
 class ResultsPlotter:
     """Class for creating performance analysis plots for portfolio experiments"""
 
-    def __init__(self, results, model_name, detailed_results=None):
+    def __init__(self, results, model_name, detailed_results=None, test_data=None):
         """
         Initialize the plotter with experiment results
 
         results: List of result dictionaries from experiments
         model_name: Name of the cost model
+        detailed_results: Detailed results for each experiment
+        test_data: Test price relatives data for computing B&H trajectories
         """
         self.results = results
         self.model_name = model_name
         self.df = pd.DataFrame(results)
         self.df['model'] = model_name
         self.detailed_results = detailed_results
+        self.test_data = test_data
 
-    def plot_all(self, save_path=None, bah_results=None):
+    def plot_parameter_analysis(self, save_path=None, bah_results=None, nasdaq_bah_results=None,
+                                sp500_bah_results=None):
         """
-        Create all plots (2x2 grid)
+        Create parameter analysis plots (2x2 grid) - renamed from plot_all
 
         save_path: Path to save the plot (optional)
         bah_results: Buy and hold daily wealth array for comparison (optional)
@@ -34,7 +38,7 @@ class ResultsPlotter:
         fig.suptitle(f'{self.model_name} - Performance Analysis', fontsize=16, fontweight='bold')
 
         # Plot 1: Top 5 Wealth Trajectories
-        self._plot_wealth_trajectories(axes[0, 0], bah_results)
+        self._plot_wealth_trajectories(axes[0, 0], bah_results, nasdaq_bah_results, sp500_bah_results)
 
         # Plot 2: Cost Penalty Analysis
         self._plot_cost_penalty_effect(axes[0, 1])
@@ -49,12 +53,134 @@ class ResultsPlotter:
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"Plot saved to: {save_path}")
+            print(f"Parameter analysis plot saved to: {save_path}")
 
         plt.show()
         plt.close()
 
-    def _plot_wealth_trajectories(self, ax, bah_results=None):
+    def plot_trading_value_comparison(self, save_path=None, bah_results=None,
+                                      nasdaq_bah_results=None, sp500_bah_results=None):
+        """
+        Create comprehensive comparison plot showing:
+        - Top 5 wealth trajectories WITH trades
+        - Same 5 configurations WITHOUT trades (B&H from initial portfolio)
+        - Uniform B&H, NASDAQ, and S&P 500 benchmarks
+
+        Total: 10 strategy lines + 3 benchmark lines = 13 lines
+
+        save_path: Path to save the plot (optional)
+        bah_results: Uniform buy and hold daily wealth array
+        nasdaq_bah_results: NASDAQ buy and hold daily wealth array
+        sp500_bah_results: S&P 500 buy and hold daily wealth array
+        """
+        if self.test_data is None:
+            raise ValueError("test_data is required for computing B&H trajectories. "
+                             "Initialize ResultsPlotter with test_data parameter.")
+
+        fig, ax = plt.subplots(1, 1, figsize=(14, 9))
+        fig.suptitle(f'{self.model_name} - Trading Value Analysis', fontsize=16, fontweight='bold')
+
+        # Get top 5 results
+        df_sorted = self.df.sort_values('test_final_wealth', ascending=False)
+        top_5 = df_sorted.head(5)
+
+        # Maximally distinct colors for 5 pairs - using well-separated colors
+        # These are from ColorBrewer's qualitative Set1 palette, optimized for distinction
+        strategy_colors = [
+            '#e41a1c',  # Bright Red
+            '#377eb8',  # Medium Blue
+            '#4daf4a',  # Green
+            '#ff7f00',  # Orange
+            '#984ea3',  # Purple
+        ]
+
+        # Plot each of the top 5 configurations
+        for idx, (_, row) in enumerate(top_5.iterrows()):
+            # Configuration label
+            config_label = f"CP={row['cost_penalty']:.1f}, α={row['alpha']:.3f}"
+
+            # Plot WITH trades (solid line, thick)
+            ax.plot(row['test_daily_wealth'],
+                    label=f"#{idx + 1} With Trades: {config_label}",
+                    linestyle='-',
+                    linewidth=3.0,
+                    color=strategy_colors[idx],
+                    alpha=0.95)
+
+            # Find corresponding detailed result to get initial portfolio
+            detail = self._find_detailed_result(row)
+            if detail:
+                initial_portfolio = detail['testing']['portfolios_used'][0]
+
+                # Compute B&H trajectory from this initial portfolio
+                bh_trajectory = self._compute_bah_trajectory(initial_portfolio)
+
+                # Plot WITHOUT trades (dashed line, same color, slightly thinner)
+                ax.plot(bh_trajectory,
+                        label=f"#{idx + 1} No Trades: {config_label}",
+                        linestyle='--',
+                        linewidth=2.5,
+                        color=strategy_colors[idx],
+                        alpha=0.7)
+
+        # Plot benchmarks with distinct styles using neutral colors
+        if bah_results is not None:
+            ax.plot(bah_results, label='Buy & Hold (Uniform)',
+                    linestyle=':', linewidth=3.5, color='black', alpha=0.9)
+
+        if nasdaq_bah_results is not None:
+            ax.plot(nasdaq_bah_results, label='NASDAQ (Buy & Hold)',
+                    linestyle='-.', linewidth=3.0, color='dimgray', alpha=0.8)
+
+        if sp500_bah_results is not None:
+            ax.plot(sp500_bah_results, label='S&P 500 (Buy & Hold)',
+                    linestyle=(0, (3, 1, 1, 1)), linewidth=3.0, color='gray', alpha=0.8)
+
+        ax.set_xlabel('Trading Days', fontsize=12)
+        ax.set_ylabel('Wealth', fontsize=12)
+        ax.set_title('Top 5 Strategies: With vs Without Trading', fontsize=13, fontweight='bold')
+        ax.legend(fontsize=8, loc='best', ncol=2)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Trading value comparison plot saved to: {save_path}")
+
+        plt.show()
+        plt.close()
+
+    def _find_detailed_result(self, row):
+        """Find the detailed result matching the given row parameters"""
+        if self.detailed_results is None:
+            return None
+
+        for detail in self.detailed_results:
+            params = detail['parameters']
+            if (params['cost_penalty'] == row['cost_penalty'] and
+                    params['alpha'] == row['alpha'] and
+                    params['improvement_threshold'] == row['improvement_threshold']):
+                return detail
+        return None
+
+    def _compute_bah_trajectory(self, initial_portfolio):
+        """
+        Compute buy-and-hold wealth trajectory from given initial portfolio
+
+        initial_portfolio: Starting portfolio weights
+        """
+        wealth = 1.0
+        trajectory = [wealth]
+
+        for price_rel in self.test_data:
+            daily_return = np.dot(initial_portfolio, price_rel)
+            wealth *= daily_return
+            trajectory.append(wealth)
+
+        return np.array(trajectory)
+
+    def _plot_wealth_trajectories(self, ax, bah_results=None, nasdaq_bah_results=None, sp500_bah_results=None):
         """Plot top 5 wealth trajectories"""
         df_sorted = self.df.sort_values('test_final_wealth', ascending=False)
         top_5 = df_sorted.head(5)
@@ -64,8 +190,18 @@ class ResultsPlotter:
             linestyle = '-' if idx < 3 else '--'
             ax.plot(row['test_daily_wealth'], label=label, linestyle=linestyle, linewidth=2)
 
+        # Plot benchmarks with distinct styles
         if bah_results is not None:
-            ax.plot(bah_results, label='Buy & Hold', linestyle=':', linewidth=2.5, color='black', alpha=0.7)
+            ax.plot(bah_results, label='Buy & Hold (Portfolio)',
+                    linestyle=':', linewidth=2.5, color='black', alpha=0.7)
+
+        if nasdaq_bah_results is not None:
+            ax.plot(nasdaq_bah_results, label='NASDAQ (Buy & Hold)',
+                    linestyle='-.', linewidth=2.5, color='blue', alpha=0.6)
+
+        if sp500_bah_results is not None:
+            ax.plot(sp500_bah_results, label='S&P 500 (Buy & Hold)',
+                    linestyle='--', linewidth=2.5, color='green', alpha=0.6)
 
         ax.set_xlabel('Trading Days', fontsize=11)
         ax.set_ylabel('Wealth', fontsize=11)
@@ -153,7 +289,7 @@ class ResultsPlotter:
         return self.df
 
     def plot_wealth_comparison(self, save_path=None, bah_results=None, modified_bah_results=None, trade_dates=None,
-                               trade_costs_dollars=None):
+                               trade_costs_dollars=None, nasdaq_bah_results=None, sp500_bah_results=None):
         """
         Create a single plot comparing best trajectory with regular and modified B&H
 
@@ -176,14 +312,21 @@ class ResultsPlotter:
         # Plot regular B&H (uniform start)
         if bah_results is not None:
             ax.plot(bah_results, label='Buy & Hold (Uniform)', linestyle=':', linewidth=2.5, color='black', alpha=0.7)
+        # Plot NASDAQ B&H
+        if nasdaq_bah_results is not None:
+            ax.plot(nasdaq_bah_results, label='NASDAQ (Buy & Hold)',
+                    linestyle='-.', linewidth=2.5, color='blue', alpha=0.6)
+        # Plot S&P500 B&H
+        if sp500_bah_results is not None:
+            ax.plot(sp500_bah_results, label='S&P 500 (Buy & Hold)',
+                    linestyle='--', linewidth=2.5, color='green', alpha=0.6)
 
         # Plot modified B&H trajectory (matching initial portfolio)
         if modified_bah_results is not None and len(modified_bah_results) > 0:
             ax.plot(modified_bah_results[0], label='Buy & Hold (Best Config Start)',
                     linestyle='-.', linewidth=2.5, color='tab:orange', alpha=0.8)
 
-        # Add vertical lines for trade dates with width proportional to cost
-        # Add vertical lines for trade dates (color ∝ transaction cost)
+        # Add vertical lines for trade dates with color proportional to cost
         if trade_dates is not None and len(trade_dates) > 0:
             y_min, y_max = ax.get_ylim()
 
@@ -252,7 +395,6 @@ class ResultsPlotter:
     def plot_portfolio(self, index, ticker_names, save_path=None):
         """
         Visualize portfolio allocation at a specific day using polar chart
-
 
         index: Day index to visualize
         ticker_names: List of ticker names corresponding to portfolio positions
