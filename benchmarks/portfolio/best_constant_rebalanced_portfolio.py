@@ -71,21 +71,14 @@ class BestConstantRebalancedPortfolio:
                 # Random starting points
                 w0 = np.random.dirichlet(np.ones(n_stocks))
 
-            result = minimize(
-                objective,
-                w0,
-                method=method,
-                bounds=bounds,
-                constraints=constraints,
-                options={'maxiter': 1000}
-            )
+            result = minimize(objective, w0, method=method, bounds=bounds, constraints=constraints, options={'maxiter': 1000})
 
             if result.success and result.fun < best_objective:
                 best_objective = result.fun
                 best_result = result
 
         if best_result is None or not best_result.success:
-            print("⚠Optimization did not converge well, using uniform weights")
+            print("Optimization did not converge well. Using uniform weights")
             return np.ones(n_stocks) / n_stocks
 
         # Normalize to ensure sum = 1 (numerical precision)
