@@ -73,7 +73,7 @@ if __name__ == "__main__":
     # STOCKS = ["NVDA", "TSLA", "AMD", "PLTR", "SNOW"]
     STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]  
     # STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "PLTR", "SNOW"]
-    INITIAL_CAPITAL = 1000
+    INITIAL_CAPITAL = 10000 # Price in USD
     N_TRIALS = 120
     N_JOBS = 3
     SAVE_RESULTS = True
@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
     experiment = ONSOptunaExperiment(
         cost_model=cost_model,
-        model_name=f"IB Fixed (${price_to_k}k)[AAPL MSFT GOOGL AMZN META]", # NVDA TSLA AMD PLTR SNOW
+        model_name=f"IB Fixed (${price_to_k}k)[AAPL MSFT GOOGL AMZN META CASH]", # NVDA TSLA AMD PLTR SNOW
         stocks=data_dict['stock_names'],
         train_data=data_dict['train_price_relatives'],
         val_data=data_dict['val_price_relatives'],

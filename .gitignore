@@ -14,9 +14,14 @@ experiments/portfolio/universal_portfolio_modified.py
 TODO.md
 
 # Ignore all folders in results besides .gitkeep files
+/results/portfolio/WithCosts/**
+# But allow directories so Git can reach the .gitkeep files
+!/results/portfolio/WithCosts/**/
+# Keep all .gitkeep files
+!/results/portfolio/WithCosts/**/.gitkeep
 
-/results/portfolio/WithCosts/*
-!/results/portfolio/WithCosts/AdaBARRONS/.gitkeep
-!/results/portfolio/WithCosts/BARRONS/.gitkeep
-!/results/portfolio/WithCosts/ONS/.gitkeep
+/experiments/portfolio/ada_barrons/*
+/experiments/portfolio/barrons/*
 
+/experiments/portfolio/ons/ons_hpo.db
+/experiments/portfolio/ons/optuna_study.db
