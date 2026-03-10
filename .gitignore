@@ -1,5 +1,7 @@
 .venv/
 .idea/
+__pycache__/
+*.pyc
 
 plots/threshold/
 !plots/threshold/adaptive_extrema.png
@@ -24,4 +26,3 @@ TODO.md
 /experiments/portfolio/barrons/*
 
 /experiments/portfolio/ons/ons_hpo.db
-/experiments/portfolio/ons/optuna_study.db

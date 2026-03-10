@@ -28,6 +28,9 @@ class ExperimentPlotter:
         with open(self.experiment_dir / 'experiment_metadata.json', 'r') as f:
             self.metadata = json.load(f)
 
+        with open(self.experiment_dir / 'benchmarks.json', 'r') as f:
+            self.benchmarks = json.load(f)
+
         # Extract model name (should be only one)
         self.model_name = list(self.data.keys())[0]
         self.model_data = self.data[self.model_name]
@@ -93,30 +96,27 @@ class ExperimentPlotter:
         print(f"Avg Cost per Trade:  ${avg_cost_usd:.2f}")
 
         print(f"\n--- BENCHMARKS (Test Period) ---")
-        benchmarks = self.metadata['benchmarks']
+        benchmarks = self.benchmarks
 
-        if 'buy_and_hold_uniform' in benchmarks:
-            bah_uniform = benchmarks['buy_and_hold_uniform']['final_wealth']
+        if 'uniform' in benchmarks:
+            bah_uniform = benchmarks['uniform']['final_wealth']
             bah_uniform_return = (bah_uniform - 1.0) * 100
             print(f"BAH (Uniform):       {bah_uniform:.4f} ({bah_uniform_return:+.2f}%)")
 
-        if 'buy_and_hold_ons_initial' in benchmarks:
-            bah_ons_data = benchmarks['buy_and_hold_ons_initial'].get(self.model_name)
-            if bah_ons_data:
-                bah_ons = bah_ons_data['final_wealth']
-                bah_ons_return = (bah_ons - 1.0) * 100
-                print(f"BAH (ONS Initial):   {bah_ons:.4f} ({bah_ons_return:+.2f}%)")
+        if 'ons_initial' in benchmarks:
+            bah_ons = benchmarks['ons_initial']['final_wealth']
+            bah_ons_return = (bah_ons - 1.0) * 100
+            print(f"BAH (ONS Initial):   {bah_ons:.4f} ({bah_ons_return:+.2f}%)")
 
-        if benchmarks.get('nasdaq', {}).get('available'):
+        if 'nasdaq' in benchmarks:
             nasdaq = benchmarks['nasdaq']['final_wealth']
             nasdaq_return = (nasdaq - 1.0) * 100
             print(f"NASDAQ:              {nasdaq:.4f} ({nasdaq_return:+.2f}%)")
 
-        if benchmarks.get('sp500', {}).get('available'):
+        if 'sp500' in benchmarks:
             sp500 = benchmarks['sp500']['final_wealth']
             sp500_return = (sp500 - 1.0) * 100
             print(f"S&P 500:             {sp500:.4f} ({sp500_return:+.2f}%)")
-
         print(f"\n--- LATEX COPY-PASTE VALUES ---")
         print(f"Best delta:                 {best_params['delta']}")
         print(f"Best lambda:                {best_params['cost_penalty']}")
@@ -139,8 +139,10 @@ class ExperimentPlotter:
         Left: Wealth evolution with all benchmarks
         Right: Individual portfolio weights (n subplots, one per stock)
         """
-        # Create figure with 1 column for wealth + n columns for portfolio allocation
-        fig = plt.figure(figsize=(16, max(6, self.n_stocks * 2.5)))
+        fig_width = 12 + min(self.n_stocks, 10)  # grow width if more stocks
+        fig_height = max(6, 1.5 * self.n_stocks)
+        fig = plt.figure(figsize=(fig_width, fig_height))
+
         gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
         gs_right = gs[1].subgridspec(self.n_stocks, 1, hspace=0.4)
 
@@ -156,30 +158,28 @@ class ExperimentPlotter:
                        label='ONS (Cost-Aware)', linestyle='-', zorder=5)
 
         # Benchmarks
-        benchmarks = self.metadata['benchmarks']
+        benchmarks = self.benchmarks
 
-        # Uniform BAH (solid line)
-        if 'buy_and_hold_uniform' in benchmarks:
-            bah_uniform_wealth = np.array(benchmarks['buy_and_hold_uniform']['daily_wealth'])
+        # Uniform BAH
+        if 'uniform' in benchmarks:
+            bah_uniform_wealth = np.array(benchmarks['uniform']['daily_wealth'])
             ax_wealth.plot(days, bah_uniform_wealth, linewidth=2, color='#27AE60',
                            label='BAH (Uniform)', linestyle='-', alpha=0.8)
 
-        # ONS Initial Portfolio BAH (dashed line)
-        if 'buy_and_hold_ons_initial' in benchmarks:
-            bah_ons_data = benchmarks['buy_and_hold_ons_initial'].get(self.model_name)
-            if bah_ons_data:
-                bah_ons_wealth = np.array(bah_ons_data['daily_wealth'])
-                ax_wealth.plot(days, bah_ons_wealth, linewidth=2, color='#8E44AD',
-                               label='BAH (ONS Initial)', linestyle='--', alpha=0.8)
+        # ONS Initial Portfolio BAH
+        if 'ons_initial' in benchmarks:
+            bah_ons_wealth = np.array(benchmarks['ons_initial']['daily_wealth'])
+            ax_wealth.plot(days, bah_ons_wealth, linewidth=2, color='#8E44AD',
+                           label='BAH (ONS Initial)', linestyle='--', alpha=0.8)
 
-        # NASDAQ (solid line)
-        if benchmarks.get('nasdaq', {}).get('available'):
+        # NASDAQ Portfolio BAH
+        if 'nasdaq' in benchmarks:
             nasdaq_wealth = np.array(benchmarks['nasdaq']['daily_wealth'])
             ax_wealth.plot(days, nasdaq_wealth, linewidth=2, color='#E74C3C',
                            label='NASDAQ', linestyle='-', alpha=0.8)
 
-        # S&P 500 (solid line)
-        if benchmarks.get('sp500', {}).get('available'):
+        # SP500 Portfolio BAH
+        if 'sp500' in benchmarks:
             sp500_wealth = np.array(benchmarks['sp500']['daily_wealth'])
             ax_wealth.plot(days, sp500_wealth, linewidth=2, color='#3498DB',
                            label='S&P 500', linestyle='-', alpha=0.8)
@@ -190,7 +190,7 @@ class ExperimentPlotter:
         ax_wealth.legend(fontsize=9, frameon=True, shadow=True, loc='best')
         ax_wealth.grid(True, alpha=0.3, linestyle='--')
 
-        # Add final wealth annotation in upper right
+        # Add final wealth annotation
         final_wealth = daily_wealth[-1]
         net_return = (final_wealth - 1.0) * 100
         ax_wealth.text(0.98, 0.98, f'ONS Final: {final_wealth:.3f}\n({net_return:+.2f}%)',
@@ -201,15 +201,15 @@ class ExperimentPlotter:
                        bbox=dict(boxstyle='round,pad=0.6', facecolor='lightblue',
                                  edgecolor='black', alpha=0.8, linewidth=1.5))
 
-        # ========== RIGHT: Portfolio allocation (one subplot per stock, stacked vertically) ==========
-        portfolios = np.array(test_data['portfolios_used'])  # Shape: (num_days, n_stocks)
+        # ========== RIGHT: Portfolio allocation ==========
+        portfolios = np.array(test_data['portfolios_used'])
         portfolio_days = np.arange(1, len(portfolios) + 1)
 
         colors = ['#E74C3C', '#3498DB', '#2ECC71', '#F39C12', '#9B59B6',
                   '#1ABC9C', '#E67E22', '#34495E', '#95A5A6', '#D35400']
 
         for i in range(self.n_stocks):
-            ax = fig.add_subplot(gs_right[i, 0])
+            ax = fig.add_subplot(gs_right[i])
 
             ax.plot(portfolio_days, portfolios[:, i],
                     linewidth=2, color=colors[i % len(colors)], alpha=0.85)
@@ -219,7 +219,6 @@ class ExperimentPlotter:
             ax.grid(True, alpha=0.3, linestyle='--', axis='y')
             ax.set_ylabel('Weight', fontsize=8)
 
-            # Only show x-label on last subplot
             if i == self.n_stocks - 1:
                 ax.set_xlabel('Day', fontsize=9)
             else:
@@ -370,7 +369,7 @@ class ExperimentPlotter:
         print(f"Report-ready plots: {len(plots)}")
         print(f"{'=' * 80}\n")
 def main():
-    experiment_dir = "/home/robert/PycharmProjects/OnlinePortfolioSelection/results/portfolio/WithCosts/ONS/optuna_10_25-02-26_19-39-01"
+    experiment_dir = "/home/robert/PycharmProjects/OnlinePortfolioSelection/results/portfolio/WithCosts/ONS/optuna_5_10-03-26_19-58"
     plotter = ExperimentPlotter(experiment_dir)
 
     # Create all plots

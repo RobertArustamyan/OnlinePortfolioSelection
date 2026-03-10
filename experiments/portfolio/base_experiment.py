@@ -486,6 +486,21 @@ def save_experiment_results(results_dir, experiments: dict, data_dict: dict,
 
     timestamp = datetime.now().strftime('%d-%m-%y_%H-%M-%S')
 
+    benchmarks_data = {
+        name: {
+            'final_wealth': float(result['final_wealth']),
+            'daily_wealth': result['daily_wealth'].tolist()
+                if isinstance(result['daily_wealth'], np.ndarray)
+                else result['daily_wealth'],
+        }
+        for name, result in bah_results.items()
+        if result is not None
+    }
+
+    with open(results_dir / 'benchmarks.json', 'w') as f:
+        json.dump(benchmarks_data, f, indent=2, cls=NumpyEncoder)
+    print(f"Benchmarks saved to: {results_dir / 'benchmarks.json'}")
+
     metadata = {
         'run_info': {
             'timestamp': timestamp,
@@ -504,12 +519,7 @@ def save_experiment_results(results_dir, experiments: dict, data_dict: dict,
             'val_end': str(data_dict['val_test_split_date']),
         },
         'benchmarks': {
-            name: {
-                'final_wealth': float(result['final_wealth']),
-                'daily_wealth': result['daily_wealth'].tolist()
-                    if isinstance(result['daily_wealth'], np.ndarray)
-                    else result['daily_wealth'],
-            }
+            name: {'final_wealth': float(result['final_wealth'])}
             for name, result in bah_results.items()
             if result is not None
         },

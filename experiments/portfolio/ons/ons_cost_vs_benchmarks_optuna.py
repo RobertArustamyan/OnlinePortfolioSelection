@@ -74,10 +74,12 @@ if __name__ == "__main__":
     STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]  
     # STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "PLTR", "SNOW"]
     INITIAL_CAPITAL = 10000 # Price in USD
-    N_TRIALS = 120
+    N_TRIALS = 10
     N_JOBS = 3
     SAVE_RESULTS = True
     RESULTS_BASE_DIR = '/home/robert/PycharmProjects/OnlinePortfolioSelection/results/portfolio/WithCosts/ONS'
+    INDEX_BENCHMARKS = True
+    CASH_POSITION = True
 
     price_to_k = INITIAL_CAPITAL / 1000
 
@@ -88,7 +90,8 @@ if __name__ == "__main__":
         train_end_date=TRAIN_END_DATE,
         val_end_date=VAL_END_DATE,
         test_end_date=TEST_END_DATE,
-        include_cash=True
+        include_index_benchmarks=INDEX_BENCHMARKS,
+        include_cash=CASH_POSITION
     )
 
     cost_model = InteractiveBrokersCostUSD(
@@ -130,23 +133,36 @@ if __name__ == "__main__":
     experiment.run_test(best_params, verbose=True)
 
     # BAH benchmark on test period using ONS initial portfolio
+    # ONS optimized BAH
     bah_ons = run_buy_and_hold(
         data_dict['test_price_relatives'],
         initial_weights=experiment.test_results['ons_initial_portfolio'],
     )
+    # Uniform BAH
     bah_uniform = run_buy_and_hold(data_dict['test_price_relatives'])
+    bah_results = {'uniform': bah_uniform, 'ons_initial': bah_ons}
+
+    benchmark_relatives = data_dict.get('benchmark_test_relatives', {})
+    for name, relatives in benchmark_relatives.items():
+        if relatives is not None:
+            bah_bench = run_buy_and_hold(relatives)
+            bah_results[name.lower()] = bah_bench # saved as nasdaq and sp500
+
 
     print(f"Uniform BAH : {bah_uniform['final_wealth']:.4f}")
     print(f"BAH (ONS init): {bah_ons['final_wealth']:.4f}")
     print(f"ONS: {experiment.test_results['final_wealth']:.4f}")
+    for name, result in bah_results.items():
+        if name in ('nasdaq', 'sp500'):
+            print(f"{name.upper()}: {result['final_wealth']:.4f}")
 
     if SAVE_RESULTS:
-        results_dir = Path(RESULTS_BASE_DIR) / f"optuna_{len(STOCKS)}_{datetime.now().strftime('%d-%m-%y_%H-%M-%S')}"
+        results_dir = Path(RESULTS_BASE_DIR) / f"optuna_{len(STOCKS)}_{datetime.now().strftime('%d-%m-%y_%H-%M')}"
 
         save_experiment_results(
             results_dir=results_dir,
             experiments={experiment.model_name: experiment},
             data_dict=data_dict,
             run_info={'hpo_method': 'optuna', 'n_trials': N_TRIALS, 'n_jobs': N_JOBS, 'db_path': 'ons_hpo.db',},
-            bah_results={'uniform': bah_uniform, 'ons_initial': bah_ons,},
+            bah_results=bah_results,
         )

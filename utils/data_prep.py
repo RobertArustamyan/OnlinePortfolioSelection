@@ -113,7 +113,7 @@ def prepare_stock_data_2split(stocks, train_start_date, train_end_date, test_end
 
 
 def prepare_stock_data_3split(stocks, train_start_date, train_end_date, val_end_date, test_end_date=None,
-                              include_benchmarks=True, include_cash=False):
+                              include_index_benchmarks=True, include_cash=False):
     """
     Prepare stock data with train/validation/test split.
 
@@ -122,7 +122,7 @@ def prepare_stock_data_3split(stocks, train_start_date, train_end_date, val_end_
     :param train_end_date: Training end date (also validation start date)
     :param val_end_date: Validation end date (also test start date)
     :param test_end_date: Test end date (defaults to today)
-    :param include_benchmarks: Whether to download benchmark indices
+    :param include_index_benchmarks: Whether to download benchmark indices
     :return: Dictionary with price relatives, actual prices, dates, and benchmarks
     """
 
@@ -233,7 +233,7 @@ def prepare_stock_data_3split(stocks, train_start_date, train_end_date, val_end_
         'val_test_split_date': test_start
     }
 
-    if include_benchmarks:
+    if include_index_benchmarks:
         print(f"Downloading benchmark data")
         benchmark_tickers = {
             'NASDAQ': '^IXIC',
