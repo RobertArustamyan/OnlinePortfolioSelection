@@ -17,6 +17,7 @@ from utils.data_prep import prepare_stock_data_3split
 from benchmarks.portfolio.buy_and_hold import run_buy_and_hold
 from experiments.portfolio.base_experiment import make_optuna_storage
 from experiments.portfolio.base_experiment import save_experiment_results, NumpyEncoder
+from experiments.portfolio.ons.visualisation_ons import ExperimentPlotter
 
 
 class ONSOptunaExperiment(BaseOptunaExperiment):
@@ -170,3 +171,7 @@ if __name__ == "__main__":
             run_info={'hpo_method': 'optuna', 'n_trials': N_TRIALS, 'n_jobs': N_JOBS, 'db_path': 'ons_hpo.db',},
             bah_results=bah_results,
         )
+
+    # Automatically create plots
+    plotter = ExperimentPlotter(results_dir)
+    plotter.create_all_plots()

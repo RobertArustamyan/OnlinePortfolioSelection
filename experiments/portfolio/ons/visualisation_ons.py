@@ -134,17 +134,13 @@ class ExperimentPlotter:
         print(f"\n{'=' * 80}\n")
 
     def plot_test_wealth_and_allocation(self, save_path=None):
-        """
-        Plot 1: Test wealth over time + portfolio allocation
-        Left: Wealth evolution with all benchmarks
-        Right: Individual portfolio weights (n subplots, one per stock)
-        """
-        fig_width = 12 + min(self.n_stocks, 10)  # grow width if more stocks
+        fig_width = 14 + min(self.n_stocks, 10)
         fig_height = max(6, 1.5 * self.n_stocks)
         fig = plt.figure(figsize=(fig_width, fig_height))
 
-        gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
-        gs_right = gs[1].subgridspec(self.n_stocks, 1, hspace=0.4)
+        gs = fig.add_gridspec(1, 3, width_ratios=[2, 1, 1])
+        gs_weights = gs[1].subgridspec(self.n_stocks, 1, hspace=0.4)
+        gs_returns = gs[2].subgridspec(self.n_stocks, 1, hspace=0.4)
 
         # ========== LEFT: Wealth with benchmarks ==========
         ax_wealth = fig.add_subplot(gs[0, 0])
@@ -153,36 +149,26 @@ class ExperimentPlotter:
         daily_wealth = np.array(test_data['daily_wealth'])
         days = np.arange(len(daily_wealth))
 
-        # ONS wealth
         ax_wealth.plot(days, daily_wealth, linewidth=2.5, color='#2E4053',
                        label='ONS (Cost-Aware)', linestyle='-', zorder=5)
 
-        # Benchmarks
         benchmarks = self.benchmarks
 
-        # Uniform BAH
         if 'uniform' in benchmarks:
-            bah_uniform_wealth = np.array(benchmarks['uniform']['daily_wealth'])
-            ax_wealth.plot(days, bah_uniform_wealth, linewidth=2, color='#27AE60',
-                           label='BAH (Uniform)', linestyle='-', alpha=0.8)
+            ax_wealth.plot(days, np.array(benchmarks['uniform']['daily_wealth']),
+                           linewidth=2, color='#27AE60', label='BAH (Uniform)', linestyle='-', alpha=0.8)
 
-        # ONS Initial Portfolio BAH
         if 'ons_initial' in benchmarks:
-            bah_ons_wealth = np.array(benchmarks['ons_initial']['daily_wealth'])
-            ax_wealth.plot(days, bah_ons_wealth, linewidth=2, color='#8E44AD',
-                           label='BAH (ONS Initial)', linestyle='--', alpha=0.8)
+            ax_wealth.plot(days, np.array(benchmarks['ons_initial']['daily_wealth']),
+                           linewidth=2, color='#8E44AD', label='BAH (ONS Initial)', linestyle='--', alpha=0.8)
 
-        # NASDAQ Portfolio BAH
         if 'nasdaq' in benchmarks:
-            nasdaq_wealth = np.array(benchmarks['nasdaq']['daily_wealth'])
-            ax_wealth.plot(days, nasdaq_wealth, linewidth=2, color='#E74C3C',
-                           label='NASDAQ', linestyle='-', alpha=0.8)
+            ax_wealth.plot(days, np.array(benchmarks['nasdaq']['daily_wealth']),
+                           linewidth=2, color='#E74C3C', label='NASDAQ', linestyle='-', alpha=0.8)
 
-        # SP500 Portfolio BAH
         if 'sp500' in benchmarks:
-            sp500_wealth = np.array(benchmarks['sp500']['daily_wealth'])
-            ax_wealth.plot(days, sp500_wealth, linewidth=2, color='#3498DB',
-                           label='S&P 500', linestyle='-', alpha=0.8)
+            ax_wealth.plot(days, np.array(benchmarks['sp500']['daily_wealth']),
+                           linewidth=2, color='#3498DB', label='S&P 500', linestyle='-', alpha=0.8)
 
         ax_wealth.set_xlabel('Trading Day', fontsize=12, fontweight='bold')
         ax_wealth.set_ylabel('Wealth (Normalized)', fontsize=12, fontweight='bold')
@@ -190,39 +176,56 @@ class ExperimentPlotter:
         ax_wealth.legend(fontsize=9, frameon=True, shadow=True, loc='best')
         ax_wealth.grid(True, alpha=0.3, linestyle='--')
 
-        # Add final wealth annotation
         final_wealth = daily_wealth[-1]
         net_return = (final_wealth - 1.0) * 100
         ax_wealth.text(0.98, 0.98, f'ONS Final: {final_wealth:.3f}\n({net_return:+.2f}%)',
-                       transform=ax_wealth.transAxes,
-                       fontsize=10,
-                       verticalalignment='top',
-                       horizontalalignment='right',
+                       transform=ax_wealth.transAxes, fontsize=10,
+                       verticalalignment='top', horizontalalignment='right',
                        bbox=dict(boxstyle='round,pad=0.6', facecolor='lightblue',
                                  edgecolor='black', alpha=0.8, linewidth=1.5))
 
-        # ========== RIGHT: Portfolio allocation ==========
+        # ========== MIDDLE: Portfolio weights ==========
         portfolios = np.array(test_data['portfolios_used'])
         portfolio_days = np.arange(1, len(portfolios) + 1)
+
+        # ========== RIGHT: Cumulative stock returns ==========
+        price_relatives = np.array(test_data['test_price_relatives'])  # shape: (days, n_stocks)
+        cumulative_returns = np.cumprod(price_relatives, axis=0)  # cumulative wealth per stock
 
         colors = ['#E74C3C', '#3498DB', '#2ECC71', '#F39C12', '#9B59B6',
                   '#1ABC9C', '#E67E22', '#34495E', '#95A5A6', '#D35400']
 
         for i in range(self.n_stocks):
-            ax = fig.add_subplot(gs_right[i])
+            color = colors[i % len(colors)]
 
-            ax.plot(portfolio_days, portfolios[:, i],
-                    linewidth=2, color=colors[i % len(colors)], alpha=0.85)
-
-            ax.set_title(self.stocks[i], fontsize=10, fontweight='bold')
-            ax.set_ylim([0, 1])
-            ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-            ax.set_ylabel('Weight', fontsize=8)
-
+            # Portfolio weight subplot
+            ax_w = fig.add_subplot(gs_weights[i])
+            ax_w.plot(portfolio_days, portfolios[:, i], linewidth=2, color=color, alpha=0.85)
+            ax_w.set_title(self.stocks[i], fontsize=10, fontweight='bold')
+            ax_w.set_ylim([0, 1])
+            ax_w.grid(True, alpha=0.3, linestyle='--', axis='y')
+            ax_w.set_ylabel('Weight', fontsize=8)
             if i == self.n_stocks - 1:
-                ax.set_xlabel('Day', fontsize=9)
+                ax_w.set_xlabel('Day', fontsize=9)
             else:
-                ax.set_xticklabels([])
+                ax_w.set_xticklabels([])
+
+            # Cumulative return subplot
+            ax_r = fig.add_subplot(gs_returns[i])
+            ax_r.plot(portfolio_days, cumulative_returns[:, i], linewidth=2, color=color, alpha=0.85)
+            ax_r.set_title(self.stocks[i], fontsize=10, fontweight='bold')
+            ax_r.grid(True, alpha=0.3, linestyle='--', axis='y')
+            ax_r.set_ylabel('Cum. Return', fontsize=8)
+            if i == self.n_stocks - 1:
+                ax_r.set_xlabel('Day', fontsize=9)
+            else:
+                ax_r.set_xticklabels([])
+
+        # Column headers
+        fig.text(0.68, 1.01, 'Portfolio Weight', ha='center', fontsize=11, fontweight='bold',
+                 transform=fig.transFigure)
+        fig.text(0.88, 1.01, 'Cumulative Return', ha='center', fontsize=11, fontweight='bold',
+                 transform=fig.transFigure)
 
         plt.tight_layout()
 
@@ -354,8 +357,8 @@ class ExperimentPlotter:
         # Only create plots 1, 4, and 7
         plots = [
             ('test_wealth_and_allocation.png', self.plot_test_wealth_and_allocation),
-            ('transaction_costs.png', self.plot_transaction_costs),
-            ('all_configs_training.png', self.plot_all_configs_training_wealth),
+            # ('transaction_costs.png', self.plot_transaction_costs),
+            # ('all_configs_training.png', self.plot_all_configs_training_wealth),
         ]
 
         for filename, plot_func in plots:
@@ -365,11 +368,11 @@ class ExperimentPlotter:
             plt.close('all')  # Close to free memory
 
         print(f"\n{'=' * 80}")
-        print(f"✓ All plots created successfully!")
+        print(f"All plots created successfully!")
         print(f"Report-ready plots: {len(plots)}")
         print(f"{'=' * 80}\n")
 def main():
-    experiment_dir = "/home/robert/PycharmProjects/OnlinePortfolioSelection/results/portfolio/WithCosts/ONS/optuna_5_10-03-26_19-58"
+    experiment_dir = "/home/robert/PycharmProjects/OnlinePortfolioSelection/results/portfolio/WithCosts/ONS_Synthetic/optuna_5_11-03-26_21-50"
     plotter = ExperimentPlotter(experiment_dir)
 
     # Create all plots
