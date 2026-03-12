@@ -3,13 +3,15 @@ ons_optuna_experiment.py
 
 Optuna HPO experiment for OnlineNewtonStepCosts.
 """
+import os
 from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+from dotenv import load_dotenv
+
 from algorithms.portfolio.online_newton_step_costs import OnlineNewtonStepCosts
 from experiments.portfolio.base_experiment import BaseOptunaExperiment
-
 from algorithms.transactions.interactive_brokers import InteractiveBrokersCostUSD
 from utils.data_prep import prepare_stock_data_3split
 from benchmarks.portfolio.buy_and_hold import run_buy_and_hold
@@ -63,7 +65,7 @@ class ONSOptunaExperiment(BaseOptunaExperiment):
         return self._default_suggest_params(trial, search_space)
 
 if __name__ == "__main__":
-
+    load_dotenv()
 
     TRAIN_START_DATE = "2021-02-01"
     TRAIN_END_DATE = "2023-02-01"
@@ -77,7 +79,7 @@ if __name__ == "__main__":
     N_TRIALS = 10
     N_JOBS = 3
     SAVE_RESULTS = True
-    RESULTS_BASE_DIR = '/home/robert/PycharmProjects/OnlinePortfolioSelection/results/portfolio/WithCosts/ONS'
+    RESULTS_BASE_DIR = os.path.join(os.getenv("RESULT_DIR_ONS"), "Optuna")
     INDEX_BENCHMARKS = True
     CASH_POSITION = True
 
@@ -105,8 +107,10 @@ if __name__ == "__main__":
         'cost_penalty': {'type': 'float', 'low': 0.0, 'high': 1.0},
         'alpha': {'type': 'float', 'low': 0.0, 'high': 0.15},
     }
+    hyperparams_dir = os.getenv("HYPERPARAMS_ONS")
+    db_path = os.path.join(hyperparams_dir, "ons.db")
 
-    storage = make_optuna_storage(db_path="ons_hpo.db")
+    storage = make_optuna_storage(db_path=db_path)
 
     experiment = ONSOptunaExperiment(
         cost_model=cost_model,

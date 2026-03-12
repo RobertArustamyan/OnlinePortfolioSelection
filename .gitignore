@@ -2,6 +2,7 @@
 .idea/
 __pycache__/
 *.pyc
+.env
 
 plots/threshold/
 !plots/threshold/adaptive_extrema.png
@@ -25,4 +26,5 @@ TODO.md
 /experiments/portfolio/ada_barrons/*
 /experiments/portfolio/barrons/*
 
-/experiments/portfolio/ons/ons_hpo.db
+hyperparameters/ONS/*
+hyperparameters/**/.gitkeep
