@@ -579,6 +579,7 @@ def save_experiment_results(results_dir, experiments: dict, data_dict: dict,
                     p.tolist() if isinstance(p, np.ndarray) else p
                     for p in experiment.test_results['portfolios_used']
                 ],
+                'test_price_relatives': data_dict['test_price_relatives'].tolist()
             },
         }
 
