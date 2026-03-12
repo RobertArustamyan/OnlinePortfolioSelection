@@ -355,6 +355,7 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
     def _optuna_objective(self, trial, search_space: dict) -> float:
         params = self._suggest_params(trial, search_space)
         result = self.run_single_training(params)
+        self.all_results.append(result)
 
         trial.set_user_attr('train_final_wealth', result['training']['final_wealth'])
         trial.set_user_attr('val_final_wealth', result['validation']['final_wealth'])
@@ -362,7 +363,40 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         trial.set_user_attr('val_trade_freq', result['validation']['trade_frequency'])
         trial.set_user_attr('val_avg_turnover', result['validation']['avg_turnover'])
 
-        self.all_results.append(result)
+
+        val_daily_wealth = np.array(result['validation']['daily_wealth'])
+        daily_returns = np.diff(val_daily_wealth) / val_daily_wealth[:-1]
+
+        # Sharpe Ratio (annualized)
+        if len(daily_returns) > 1 and np.std(daily_returns) > 1e-10:
+            sharpe = (np.mean(daily_returns) / np.std(daily_returns)) * np.sqrt(252)
+        else:
+            sharpe = 0.0
+
+        # Sortino Ratio (annualized, using downside deviation)
+        downside_returns = daily_returns[daily_returns < 0]
+        if len(downside_returns) > 1:
+            downside_std = np.sqrt(np.mean(downside_returns ** 2))
+            sortino = (np.mean(daily_returns) / downside_std) * np.sqrt(252) if downside_std > 1e-10 else 0.0
+        else:
+            sortino = 0.0
+
+        # Max Drawdown
+        cumulative = val_daily_wealth / val_daily_wealth[0]
+        running_max = np.maximum.accumulate(cumulative)
+        drawdowns = (running_max - cumulative) / running_max
+        max_drawdown = np.max(drawdowns)
+
+        # Calmar Ratio (annualized return / max drawdown)
+        n_days = len(daily_returns)
+        annualized_return = (val_daily_wealth[-1] / val_daily_wealth[0]) ** (252 / n_days) - 1
+        calmar = annualized_return / max_drawdown if max_drawdown > 1e-10 else 0.0
+
+        trial.set_user_attr('val_sharpe', round(float(sharpe), 4))
+        trial.set_user_attr('val_sortino', round(float(sortino), 4))
+        trial.set_user_attr('val_max_drawdown', round(float(max_drawdown), 4))
+        trial.set_user_attr('val_calmar', round(float(calmar), 4))
+
         return result['validation']['final_wealth']
 
     def optuna_search(self, search_space: dict, n_trials=50, n_jobs=1, storage=None, sampler=None, pruner=None, verbose=True) -> dict:
