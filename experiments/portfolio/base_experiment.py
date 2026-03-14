@@ -355,7 +355,6 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
     def _optuna_objective(self, trial, search_space: dict) -> float:
         params = self._suggest_params(trial, search_space)
         result = self.run_single_training(params)
-        self.all_results.append(result)
 
         trial.set_user_attr('train_final_wealth', result['training']['final_wealth'])
         trial.set_user_attr('val_final_wealth', result['validation']['final_wealth'])
@@ -363,7 +362,7 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         trial.set_user_attr('val_trade_freq', result['validation']['trade_frequency'])
         trial.set_user_attr('val_avg_turnover', result['validation']['avg_turnover'])
 
-
+        # Risk metrics for validation
         val_daily_wealth = np.array(result['validation']['daily_wealth'])
         daily_returns = np.diff(val_daily_wealth) / val_daily_wealth[:-1]
 
@@ -397,7 +396,11 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         trial.set_user_attr('val_max_drawdown', round(float(max_drawdown), 4))
         trial.set_user_attr('val_calmar', round(float(calmar), 4))
 
-        return result['validation']['final_wealth']
+        self.all_results.append(result)
+        if result['validation']['final_wealth'] < 1.0:
+            return -999.0
+
+        return sortino
 
     def optuna_search(self, search_space: dict, n_trials=50, n_jobs=1, storage=None, sampler=None, pruner=None, verbose=True) -> dict:
         if sampler is None:
