@@ -11,6 +11,51 @@ import optuna
 from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
 
+
+def _compute_risk_metrics(daily_wealth):
+    """
+    Compute risk-adjusted performance metrics from a daily wealth series.
+    Returns a dict with sharpe, sortino, max_drawdown, calmar, annualized_return.
+    """
+    daily_wealth = np.array(daily_wealth)
+    daily_returns = np.diff(daily_wealth) / daily_wealth[:-1]
+    n_days = len(daily_returns)
+
+    # Sharpe Ratio (annualized)
+    if n_days > 1 and np.std(daily_returns) > 1e-10:
+        sharpe = (np.mean(daily_returns) / np.std(daily_returns)) * np.sqrt(252)
+    else:
+        sharpe = 0.0
+
+    # Sortino Ratio (annualized, using downside deviation)
+    downside_returns = daily_returns[daily_returns < 0]
+    if len(downside_returns) > 1:
+        downside_std = np.sqrt(np.mean(downside_returns ** 2))
+        sortino = (np.mean(daily_returns) / downside_std) * np.sqrt(252) if downside_std > 1e-10 else 0.0
+    else:
+        sortino = 0.0
+
+    # Max Drawdown
+    cumulative = daily_wealth / daily_wealth[0]
+    running_max = np.maximum.accumulate(cumulative)
+    drawdowns = (running_max - cumulative) / running_max
+    max_drawdown = float(np.max(drawdowns))
+
+    # Annualized Return
+    annualized_return = (daily_wealth[-1] / daily_wealth[0]) ** (252 / n_days) - 1 if n_days > 0 else 0.0
+
+    # Calmar Ratio (annualized return / max drawdown)
+    calmar = annualized_return / max_drawdown if max_drawdown > 1e-10 else 0.0
+
+    return {
+        'sharpe': round(float(sharpe), 4),
+        'sortino': round(float(sortino), 4),
+        'max_drawdown': round(float(max_drawdown), 4),
+        'calmar': round(float(calmar), 4),
+        'annualized_return': round(float(annualized_return), 4),
+    }
+
+
 class _ExperimentMixin:
     """
     Provides the shared validation and test loops.
@@ -23,41 +68,52 @@ class _ExperimentMixin:
         """
         val_wealth = 1.0
         val_daily_wealth = [val_wealth]
-        val_costs, val_turnovers = [], []
+        val_costs, val_costs_dollars, val_turnovers = [], [], []
         val_no_trades = 0
-        val_portfolios = []
+        val_portfolios, val_traded_flags = [], []
 
         for day_idx, price_rel in enumerate(self.val_data):
-            if hasattr(cost_model_val, 'update_state'):
-                cost_model_val.update_state(
-                    wealth_fraction=val_wealth,
-                    stock_prices=self.val_prices[day_idx],
-                )
+
+            cost_model_val.update_state(wealth_fraction=val_wealth, stock_prices=self.val_prices[day_idx])
 
             current_portfolio = algo_val.get_portfolio()
             val_portfolios.append(current_portfolio)
             prev_portfolio = algo_val.prev_portfolio.copy()
 
             tc = cost_model_val.compute_cost(prev_portfolio, current_portfolio)
+            dollar_cost = val_wealth * tc * self.initial_capital
             val_wealth *= (1 - tc)
-            if tc == 0:
+
+            traded = dollar_cost > 0
+            val_traded_flags.append(traded)
+            if not traded:
                 val_no_trades += 1
+
             val_costs.append(tc)
+            val_costs_dollars.append(dollar_cost)
             val_turnovers.append(np.sum(np.abs(current_portfolio - prev_portfolio)))
 
             val_wealth *= np.dot(current_portfolio, price_rel)
             val_daily_wealth.append(val_wealth)
             self._algo_update(algo_val, price_rel, current_portfolio)
 
+        risk_metrics = _compute_risk_metrics(val_daily_wealth)
+
         return {
             'final_wealth': val_wealth,
             'daily_wealth': val_daily_wealth,
             'portfolios_used': [p.tolist() for p in val_portfolios],
             'transaction_costs': val_costs,
+            'transaction_costs_dollars': val_costs_dollars,
+            'turnovers': val_turnovers,
             'total_transaction_cost': sum(val_costs),
             'avg_turnover': float(np.mean(val_turnovers)),
             'trade_frequency': 1 - (val_no_trades / len(self.val_data)),
+            'traded_flags': val_traded_flags,
             'num_days': len(self.val_data),
+            'net_return_pct': (val_wealth - 1.0) * 100,
+            'cost_drag_pct': sum(val_costs) * 100,
+            **risk_metrics,
         }
 
     def _run_test_loop(self, algo_test, cost_model_test):
@@ -72,11 +128,7 @@ class _ExperimentMixin:
         test_portfolios, test_traded_flags = [], []
 
         for day_idx, price_rel in enumerate(self.test_data):
-            if hasattr(cost_model_test, 'update_state'):
-                cost_model_test.update_state(
-                    wealth_fraction=test_wealth,
-                    stock_prices=self.test_prices[day_idx],
-                )
+            cost_model_test.update_state(wealth_fraction=test_wealth, stock_prices=self.test_prices[day_idx],)
 
             current_portfolio = algo_test.get_portfolio()
             prev_portfolio = algo_test.prev_portfolio.copy()
@@ -99,6 +151,8 @@ class _ExperimentMixin:
             test_daily_wealth.append(test_wealth)
             self._algo_update(algo_test, price_rel, current_portfolio)
 
+        risk_metrics = _compute_risk_metrics(test_daily_wealth)
+
         return {
             'final_wealth': test_wealth,
             'daily_wealth': test_daily_wealth,
@@ -113,6 +167,7 @@ class _ExperimentMixin:
             'num_days': len(self.test_data),
             'net_return_pct': (test_wealth - 1.0) * 100,
             'cost_drag_pct': sum(test_costs) * 100,
+            **risk_metrics,
         }
 
     def _algo_update(self, algo, price_rel, portfolio_used):
@@ -255,6 +310,10 @@ class BaseGridExperiment(_ExperimentMixin, ABC):
                   f"({test_metrics['net_return_pct']:.2f}%)")
             print(f"Cost Drag: {test_metrics['cost_drag_pct']:.4f}%")
             print(f"Trade Freq: {test_metrics['trade_frequency']:.2%}")
+            print(f"Sharpe: {test_metrics['sharpe']:.4f}")
+            print(f"Sortino: {test_metrics['sortino']:.4f}")
+            print(f"Max Drawdown: {test_metrics['max_drawdown']:.4f}")
+            print(f"Calmar: {test_metrics['calmar']:.4f}")
 
         return self.test_results
 
@@ -356,51 +415,23 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         params = self._suggest_params(trial, search_space)
         result = self.run_single_training(params)
 
+        val = result['validation']
+
         trial.set_user_attr('train_final_wealth', result['training']['final_wealth'])
-        trial.set_user_attr('val_final_wealth', result['validation']['final_wealth'])
-        trial.set_user_attr('val_total_cost', result['validation']['total_transaction_cost'])
-        trial.set_user_attr('val_trade_freq', result['validation']['trade_frequency'])
-        trial.set_user_attr('val_avg_turnover', result['validation']['avg_turnover'])
-
-        # Risk metrics for validation
-        val_daily_wealth = np.array(result['validation']['daily_wealth'])
-        daily_returns = np.diff(val_daily_wealth) / val_daily_wealth[:-1]
-
-        # Sharpe Ratio (annualized)
-        if len(daily_returns) > 1 and np.std(daily_returns) > 1e-10:
-            sharpe = (np.mean(daily_returns) / np.std(daily_returns)) * np.sqrt(252)
-        else:
-            sharpe = 0.0
-
-        # Sortino Ratio (annualized, using downside deviation)
-        downside_returns = daily_returns[daily_returns < 0]
-        if len(downside_returns) > 1:
-            downside_std = np.sqrt(np.mean(downside_returns ** 2))
-            sortino = (np.mean(daily_returns) / downside_std) * np.sqrt(252) if downside_std > 1e-10 else 0.0
-        else:
-            sortino = 0.0
-
-        # Max Drawdown
-        cumulative = val_daily_wealth / val_daily_wealth[0]
-        running_max = np.maximum.accumulate(cumulative)
-        drawdowns = (running_max - cumulative) / running_max
-        max_drawdown = np.max(drawdowns)
-
-        # Calmar Ratio (annualized return / max drawdown)
-        n_days = len(daily_returns)
-        annualized_return = (val_daily_wealth[-1] / val_daily_wealth[0]) ** (252 / n_days) - 1
-        calmar = annualized_return / max_drawdown if max_drawdown > 1e-10 else 0.0
-
-        trial.set_user_attr('val_sharpe', round(float(sharpe), 4))
-        trial.set_user_attr('val_sortino', round(float(sortino), 4))
-        trial.set_user_attr('val_max_drawdown', round(float(max_drawdown), 4))
-        trial.set_user_attr('val_calmar', round(float(calmar), 4))
+        trial.set_user_attr('val_final_wealth', val['final_wealth'])
+        trial.set_user_attr('val_total_cost', val['total_transaction_cost'])
+        trial.set_user_attr('val_trade_freq', val['trade_frequency'])
+        trial.set_user_attr('val_avg_turnover', val['avg_turnover'])
+        trial.set_user_attr('val_sharpe', val['sharpe'])
+        trial.set_user_attr('val_sortino', val['sortino'])
+        trial.set_user_attr('val_max_drawdown', val['max_drawdown'])
+        trial.set_user_attr('val_calmar', val['calmar'])
 
         self.all_results.append(result)
-        if result['validation']['final_wealth'] < 1.0:
+        if val['final_wealth'] < 1.0:
             return -999.0
 
-        return sortino
+        return val['sortino']
 
     def optuna_search(self, search_space: dict, n_trials=50, n_jobs=1, storage=None, sampler=None, pruner=None, verbose=True) -> dict:
         if sampler is None:
@@ -481,6 +512,10 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
                   f"({test_metrics['net_return_pct']:.2f}%)")
             print(f"Cost Drag: {test_metrics['cost_drag_pct']:.4f}%")
             print(f"Trade Freq: {test_metrics['trade_frequency']:.2%}")
+            print(f"Sharpe: {test_metrics['sharpe']:.4f}")
+            print(f"Sortino: {test_metrics['sortino']:.4f}")
+            print(f"Max Drawdown: {test_metrics['max_drawdown']:.4f}")
+            print(f"Calmar: {test_metrics['calmar']:.4f}")
 
         return self.test_results
 
