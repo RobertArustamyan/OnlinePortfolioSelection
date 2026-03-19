@@ -1,3 +1,5 @@
+# CURRENT VERSION OF README IS OUTDATED.
+
 # Online Portfolio Selection
 
 ## Project Structure
