@@ -516,3 +516,33 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         param_cols = [c for c in trials_df.columns if c.startswith('params_')]
         print(f"\nTop {top_n} trials by validation wealth:")
         print(trials_df.sort_values('value', ascending=False).head(top_n)[['number', 'value'] + param_cols].to_string(index=False))
+
+    def compute_benchmarks(self, test_price_relatives, benchmark_relatives=None):
+        """
+        Compute BAH benchmarks after run_test has been called.
+        Stores results in self.bah_results and returns them.
+        """
+        from benchmarks.portfolio.buy_and_hold import run_buy_and_hold
+
+        if self.test_results is None:
+            raise RuntimeError("Call run_test() before compute_benchmarks().")
+
+        bah_results = {}
+
+        # Uniform BAH
+        bah_results['uniform'] = run_buy_and_hold(test_price_relatives)
+
+        # Algorithm-specific initial portfolio BAH
+        initial_portfolio = self.test_results.get(self.initial_portfolio_key)
+        if initial_portfolio is not None:
+            bah_results['algo_initial'] = run_buy_and_hold(
+                test_price_relatives, initial_weights=initial_portfolio
+            )
+
+        # Index benchmarks
+        for name, relatives in (benchmark_relatives or {}).items():
+            if relatives is not None:
+                bah_results[name.lower()] = run_buy_and_hold(relatives)
+
+        self.bah_results = bah_results
+        return bah_results

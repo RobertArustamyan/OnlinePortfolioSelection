@@ -27,4 +27,7 @@ TODO.md
 /experiments/portfolio/barrons/*
 
 hyperparameters/ONS/*
-hyperparameters/**/.gitkeep
+!hyperparameters/**/.gitkeep
+
+.claude
+CLAUDE.local.md

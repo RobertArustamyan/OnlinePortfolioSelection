@@ -18,6 +18,7 @@ from benchmarks.portfolio.buy_and_hold import run_buy_and_hold
 from experiments.portfolio.base_experiment import make_optuna_storage
 from experiments.portfolio.base_experiment import save_experiment_results, NumpyEncoder
 from experiments.portfolio.ons.visualisation_ons import ExperimentPlotter
+from experiments.portfolio.stability_analysis import run_stability_analysis
 
 
 class ONSOptunaExperiment(BaseOptunaExperiment):
@@ -28,12 +29,12 @@ class ONSOptunaExperiment(BaseOptunaExperiment):
     def __init__(self, cost_model, model_name, stocks,
                  train_data, val_data, test_data,
                  train_prices=None, val_prices=None, test_prices=None,
-                 initial_capital=None):
+                 initial_capital=None,optimize_metric="sortino"):
         super().__init__(
             cost_model=cost_model, model_name=model_name, stocks=stocks,
             train_data=train_data, val_data=val_data, test_data=test_data,
             train_prices=train_prices, val_prices=val_prices, test_prices=test_prices,
-            initial_capital=initial_capital,
+            initial_capital=initial_capital,optimize_metric=optimize_metric,
         )
         T = len(train_data) + len(val_data) + len(test_data)
         n = self.n_stocks
@@ -68,110 +69,116 @@ class ONSOptunaExperiment(BaseOptunaExperiment):
 if __name__ == "__main__":
     load_dotenv()
 
-    TRAIN_START_DATE = "2021-02-01"
-    TRAIN_END_DATE = "2023-02-01"
-    VAL_END_DATE = "2024-02-01"
-    TEST_END_DATE = "2026-02-01"
+    # Run mode
+    RUN_MODE = "single"  # "single" or "stability"
 
-    # STOCKS = ["NVDA", "TSLA", "AMD", "PLTR", "SNOW"]
-    STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]  
-    # STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "PLTR", "SNOW"]
-    INITIAL_CAPITAL = 10000 # Price in USD
-    N_TRIALS = 10
-    N_JOBS = 3
-    SAVE_RESULTS = True
-    RESULTS_BASE_DIR = os.path.join(os.getenv("RESULT_DIR_ONS"), "Optuna")
-    INDEX_BENCHMARKS = True
-    CASH_POSITION = True
-
-    price_to_k = INITIAL_CAPITAL / 1000
-
-    # Prepare data
-    data_dict = prepare_stock_data_3split(
-        stocks=STOCKS,
-        train_start_date=TRAIN_START_DATE,
-        train_end_date=TRAIN_END_DATE,
-        val_end_date=VAL_END_DATE,
-        test_end_date=TEST_END_DATE,
-        include_index_benchmarks=INDEX_BENCHMARKS,
-        include_cash=CASH_POSITION
-    )
-
-    cost_model = InteractiveBrokersCostUSD(
-        initial_capital=INITIAL_CAPITAL,
-        pricing_type="fixed",
-        cash_index=-1
-    )
+    # Shared config
+    STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+    INITIAL_CAPITAL = 5000
+    N_TRIALS = 40
+    N_JOBS = 10
+    CASH_POSITION = False
 
     search_space = {
         'delta': {'type': 'float', 'low': 0.05, 'high': 0.99},
         'cost_penalty': {'type': 'float', 'low': 0.0, 'high': 1.0},
         'alpha': {'type': 'float', 'low': 0.0, 'high': 0.15},
     }
-    hyperparams_dir = os.getenv("HYPERPARAMS_ONS")
-    db_path = os.path.join(hyperparams_dir, "ons.db")
 
-    storage = make_optuna_storage(db_path=db_path)
-
-    experiment = ONSOptunaExperiment(
-        cost_model=cost_model,
-        model_name=f"IB Fixed (${price_to_k}k)[AAPL MSFT GOOGL AMZN META CASH]", # NVDA TSLA AMD PLTR SNOW
-        stocks=data_dict['stock_names'],
-        train_data=data_dict['train_price_relatives'],
-        val_data=data_dict['val_price_relatives'],
-        test_data=data_dict['test_price_relatives'],
-        train_prices=data_dict['train_actual_prices'],
-        val_prices=data_dict['val_actual_prices'],
-        test_prices=data_dict['test_actual_prices'],
+    cost_model = InteractiveBrokersCostUSD(
         initial_capital=INITIAL_CAPITAL,
+        pricing_type="fixed",
+        cash_index=-1,
     )
 
-    best_params = experiment.optuna_search(
-        search_space=search_space,
-        n_trials=N_TRIALS,
-        n_jobs=N_JOBS,
-        storage=storage,
-        verbose=True,
-    )
+    # Single run config
+    TRAIN_START_DATE = "2021-02-01"
+    TRAIN_END_DATE = "2023-02-01"
+    VAL_END_DATE = "2024-02-01"
+    TEST_END_DATE = "2026-02-01"
+    SAVE_RESULTS = True
+    INDEX_BENCHMARKS = True
+    RESULTS_BASE_DIR = os.path.join(os.getenv("RESULT_DIR_ONS"), "Optuna")
 
-    experiment.print_optuna_summary(top_n=10)
-    experiment.run_test(best_params, verbose=True)
+    # Stability config
+    STABILITY_WINDOWS = [
+        ("2021-02-01", "2022-08-01", "2023-08-01", "2024-08-01"),
+        ("2021-02-01", "2023-02-01", "2024-02-01", "2025-02-01"),
+        ("2022-02-01", "2023-08-01", "2024-08-01", "2026-02-01"),
+    ]
 
-    # BAH benchmark on test period using ONS initial portfolio
-    # ONS optimized BAH
-    bah_ons = run_buy_and_hold(
-        data_dict['test_price_relatives'],
-        initial_weights=experiment.test_results['ons_initial_portfolio'],
-    )
-    # Uniform BAH
-    bah_uniform = run_buy_and_hold(data_dict['test_price_relatives'])
-    bah_results = {'uniform': bah_uniform, 'ons_initial': bah_ons}
+    if RUN_MODE == "single":
+        price_to_k = INITIAL_CAPITAL / 1000
 
-    benchmark_relatives = data_dict.get('benchmark_test_relatives', {})
-    for name, relatives in benchmark_relatives.items():
-        if relatives is not None:
-            bah_bench = run_buy_and_hold(relatives)
-            bah_results[name.lower()] = bah_bench # saved as nasdaq and sp500
-
-
-    print(f"Uniform BAH : {bah_uniform['final_wealth']:.4f}")
-    print(f"BAH (ONS init): {bah_ons['final_wealth']:.4f}")
-    print(f"ONS: {experiment.test_results['final_wealth']:.4f}")
-    for name, result in bah_results.items():
-        if name in ('nasdaq', 'sp500'):
-            print(f"{name.upper()}: {result['final_wealth']:.4f}")
-
-    if SAVE_RESULTS:
-        results_dir = Path(RESULTS_BASE_DIR) / f"optuna_{len(STOCKS)}_{datetime.now().strftime('%d-%m-%y_%H-%M')}"
-
-        save_experiment_results(
-            results_dir=results_dir,
-            experiments={experiment.model_name: experiment},
-            data_dict=data_dict,
-            run_info={'hpo_method': 'optuna', 'n_trials': N_TRIALS, 'n_jobs': N_JOBS, 'db_path': 'ons_hpo.db',},
-            bah_results=bah_results,
+        data_dict = prepare_stock_data_3split(
+            stocks=STOCKS,
+            train_start_date=TRAIN_START_DATE,
+            train_end_date=TRAIN_END_DATE,
+            val_end_date=VAL_END_DATE,
+            test_end_date=TEST_END_DATE,
+            include_index_benchmarks=INDEX_BENCHMARKS,
+            include_cash=CASH_POSITION,
         )
 
-    # Automatically create plots
-    plotter = ExperimentPlotter(results_dir)
-    plotter.create_all_plots()
+        hyperparams_dir = os.getenv("HYPERPARAMS_ONS")
+        db_path = os.path.join(hyperparams_dir, "ons.db")
+        storage = make_optuna_storage(db_path=db_path)
+
+        experiment = ONSOptunaExperiment(
+            cost_model=cost_model,
+            model_name=f"IB Fixed (${price_to_k}k)[AAPL MSFT GOOGL AMZN META]",
+            stocks=data_dict['stock_names'],
+            train_data=data_dict['train_price_relatives'],
+            val_data=data_dict['val_price_relatives'],
+            test_data=data_dict['test_price_relatives'],
+            train_prices=data_dict['train_actual_prices'],
+            val_prices=data_dict['val_actual_prices'],
+            test_prices=data_dict['test_actual_prices'],
+            initial_capital=INITIAL_CAPITAL,
+            optimize_metric="sortino",
+        )
+
+        best_params = experiment.optuna_search(
+            search_space=search_space,
+            n_trials=N_TRIALS,
+            n_jobs=N_JOBS,
+            storage=storage,
+            verbose=True,
+        )
+
+        experiment.print_optuna_summary(top_n=10)
+        experiment.run_test(best_params, verbose=True)
+
+        bah_results = experiment.compute_benchmarks(
+            test_price_relatives=data_dict['test_price_relatives'],
+            benchmark_relatives=data_dict.get('benchmark_test_relatives', {}),
+        )
+
+        if SAVE_RESULTS:
+            results_dir = (Path(RESULTS_BASE_DIR) / f"optuna_{len(STOCKS)}_{datetime.now().strftime('%d-%m-%y_%H-%M')}")
+            save_experiment_results(
+                results_dir=results_dir,
+                experiments={experiment.model_name: experiment},
+                data_dict=data_dict,
+                run_info={'hpo_method': 'optuna', 'n_trials': N_TRIALS, 'n_jobs': N_JOBS, 'db_path': 'ons_hpo.db'},
+                bah_results=bah_results,
+            )
+            plotter = ExperimentPlotter(results_dir)
+            plotter.create_all_plots()
+
+    elif RUN_MODE == "stability":
+        run_stability_analysis(
+            experiment_class=ONSOptunaExperiment,
+            cost_model=cost_model,
+            stocks=STOCKS,
+            initial_capital=INITIAL_CAPITAL,
+            optimize_metric="sortino",
+            search_space=search_space,
+            windows=STABILITY_WINDOWS,
+            n_trials=N_TRIALS,
+            n_jobs=N_JOBS,
+            verbose=False,
+        )
+
+    else:
+        raise ValueError(f"Unknown RUN_MODE: '{RUN_MODE}'. Choose 'single' or 'stability'.")
