@@ -10,51 +10,10 @@ import pandas as pd
 import optuna
 from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
+from scipy.stats import skew, kurtosis
 
-
-def _compute_risk_metrics(daily_wealth):
-    """
-    Compute risk-adjusted performance metrics from a daily wealth series.
-    Returns a dict with sharpe, sortino, max_drawdown, calmar, annualized_return.
-    """
-    daily_wealth = np.array(daily_wealth)
-    daily_returns = np.diff(daily_wealth) / daily_wealth[:-1]
-    n_days = len(daily_returns)
-
-    # Sharpe Ratio (annualized)
-    if n_days > 1 and np.std(daily_returns) > 1e-10:
-        sharpe = (np.mean(daily_returns) / np.std(daily_returns)) * np.sqrt(252)
-    else:
-        sharpe = 0.0
-
-    # Sortino Ratio (annualized, using downside deviation)
-    downside_returns = daily_returns[daily_returns < 0]
-    if len(downside_returns) > 1:
-        downside_std = np.sqrt(np.mean(downside_returns ** 2))
-        sortino = (np.mean(daily_returns) / downside_std) * np.sqrt(252) if downside_std > 1e-10 else 0.0
-    else:
-        sortino = 0.0
-
-    # Max Drawdown
-    cumulative = daily_wealth / daily_wealth[0]
-    running_max = np.maximum.accumulate(cumulative)
-    drawdowns = (running_max - cumulative) / running_max
-    max_drawdown = float(np.max(drawdowns))
-
-    # Annualized Return
-    annualized_return = (daily_wealth[-1] / daily_wealth[0]) ** (252 / n_days) - 1 if n_days > 0 else 0.0
-
-    # Calmar Ratio (annualized return / max drawdown)
-    calmar = annualized_return / max_drawdown if max_drawdown > 1e-10 else 0.0
-
-    return {
-        'sharpe': round(float(sharpe), 4),
-        'sortino': round(float(sortino), 4),
-        'max_drawdown': round(float(max_drawdown), 4),
-        'calmar': round(float(calmar), 4),
-        'annualized_return': round(float(annualized_return), 4),
-    }
-
+from utils.metrics import compute_risk_metrics, compute_dsr
+from utils.io import make_optuna_storage, save_experiment_results, NumpyEncoder
 
 class _ExperimentMixin:
     """
@@ -97,7 +56,7 @@ class _ExperimentMixin:
             val_daily_wealth.append(val_wealth)
             self._algo_update(algo_val, price_rel, current_portfolio)
 
-        risk_metrics = _compute_risk_metrics(val_daily_wealth)
+        risk_metrics = compute_risk_metrics(val_daily_wealth)
 
         return {
             'final_wealth': val_wealth,
@@ -151,7 +110,7 @@ class _ExperimentMixin:
             test_daily_wealth.append(test_wealth)
             self._algo_update(algo_test, price_rel, current_portfolio)
 
-        risk_metrics = _compute_risk_metrics(test_daily_wealth)
+        risk_metrics = compute_risk_metrics(test_daily_wealth)
 
         return {
             'final_wealth': test_wealth,
@@ -302,6 +261,8 @@ class BaseGridExperiment(_ExperimentMixin, ABC):
         self._transfer_state(algo_retrain, algo_test)
         test_metrics = self._run_test_loop(algo_test, cost_model_test)
         test_metrics[self.initial_portfolio_key] = algo_test.prev_portfolio.tolist()
+
+
         self.test_results = test_metrics
 
         if verbose:
@@ -333,7 +294,7 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
     """
 
     def __init__(self, cost_model, model_name, stocks, train_data, val_data, test_data, train_prices=None,
-                 val_prices=None, test_prices=None, initial_capital=None):
+                 val_prices=None, test_prices=None, initial_capital=None, optimize_metric="sortino"):
         self.cost_model = cost_model
         self.model_name = model_name
         self.stocks = stocks
@@ -351,6 +312,13 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         self.all_results = []
         self.retrain_results = None
         self.test_results = None
+
+        valid_metrics = ("sortino", "sharpe", "calmar")
+        if optimize_metric not in valid_metrics:
+            raise ValueError(f"Invalid optimization metric: {optimize_metric}, must be one of {valid_metrics}")
+        self.optimize_metric = optimize_metric
+
+        self.has_cash = stocks[-1].lower() == 'cash'
 
     @abstractmethod
     def _build_algorithm(self, params: dict, cost_model):
@@ -428,10 +396,10 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         trial.set_user_attr('val_calmar', val['calmar'])
 
         self.all_results.append(result)
-        if val['final_wealth'] < 1.0:
+        if self.has_cash and val['final_wealth'] < 1.0:
             return -999.0
 
-        return val['sortino']
+        return val[self.optimize_metric]
 
     def optuna_search(self, search_space: dict, n_trials=50, n_jobs=1, storage=None, sampler=None, pruner=None, verbose=True) -> dict:
         if sampler is None:
@@ -444,6 +412,7 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
 
         if verbose:
             print(f"Optuna Search for: {self.model_name}")
+            print(f"Optimizing: {self.optimize_metric}")
             print(f"Sampler: {type(sampler).__name__}")
             print(f"Trials: {n_trials} | n_jobs: {n_jobs}")
             if storage:
@@ -504,6 +473,23 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         self._transfer_state(algo_retrain, algo_test)
         test_metrics = self._run_test_loop(algo_test, cost_model_test)
         test_metrics[self.initial_portfolio_key] = algo_test.prev_portfolio.tolist()
+
+        # DSR on validation(N=all trials)
+        best_val_result = max(self.all_results, key=lambda x: x['validation'][self.optimize_metric])
+        val_wealth_arr = np.array(best_val_result['validation']['daily_wealth'])
+        val_returns = np.diff(val_wealth_arr) / val_wealth_arr[:-1]
+        val_dsr = compute_dsr(sharpe_obs=best_val_result['validation']['sharpe'],n_trials=len(self.all_results),
+                              n_days=len(val_returns), skewness=float(skew(val_returns)), excess_kurtosis=float(kurtosis(val_returns)), )
+
+        test_wealth_arr = np.array(test_metrics['daily_wealth'])
+        test_returns = np.diff(test_wealth_arr) / test_wealth_arr[:-1]
+        test_dsr = compute_dsr(sharpe_obs=test_metrics['sharpe'], n_trials=1, n_days=len(test_returns),
+            skewness=float(skew(test_returns)), excess_kurtosis=float(kurtosis(test_returns)),)
+
+        test_metrics['val_dsr'] = val_dsr
+        test_metrics['test_dsr'] = test_dsr
+        test_metrics['n_trials'] = len(self.all_results)
+
         self.test_results = test_metrics
 
         if verbose:
@@ -516,6 +502,9 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
             print(f"Sortino: {test_metrics['sortino']:.4f}")
             print(f"Max Drawdown: {test_metrics['max_drawdown']:.4f}")
             print(f"Calmar: {test_metrics['calmar']:.4f}")
+            print(f"N Trials: {test_metrics['n_trials']}")
+            print(f"Val DSR:  {test_metrics['val_dsr']:.4f}  (key: ≥0.95 good, <0.5 likely noise)")
+            print(f"Test DSR: {test_metrics['test_dsr']:.4f}  (non-normality correction only)")
 
         return self.test_results
 
@@ -527,149 +516,3 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
         param_cols = [c for c in trials_df.columns if c.startswith('params_')]
         print(f"\nTop {top_n} trials by validation wealth:")
         print(trials_df.sort_values('value', ascending=False).head(top_n)[['number', 'value'] + param_cols].to_string(index=False))
-
-def make_optuna_storage(db_path="optuna_study.db"):
-    """
-    Returns a SQLite storage URL. Works with up to ~8 parallel workers.
-
-    Run in a separate terminal: optuna-dashboard sqlite:///optuna_study.db
-    Then open http://localhost:8080
-    """
-    storage_url = f"sqlite:///{db_path}"
-    print(f"[Storage] SQLite -> {db_path}")
-    print(f"[Dashboard] optuna-dashboard {storage_url}")
-    print(f"http://localhost:8080")
-    return storage_url
-
-def save_experiment_results(results_dir, experiments: dict, data_dict: dict,
-                            run_info: dict, bah_results: dict):
-    """
-    results_dir  : Path or str where files will be saved
-    experiments  : {model_name: experiment_instance}
-    data_dict    : output of prepare_stock_data_3split (for metadata)
-    run_info     : dict with hpo_method, n_trials, db_path, n_jobs etc.
-    bah_results  : {
-        'uniform': bah_uniform result,
-        'ons_initial': bah_ons result,   (or 'barrons_initial' etc.)
-    }
-    """
-    results_dir = Path(results_dir)
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime('%d-%m-%y_%H-%M-%S')
-
-    benchmarks_data = {
-        name: {
-            'final_wealth': float(result['final_wealth']),
-            'daily_wealth': result['daily_wealth'].tolist()
-                if isinstance(result['daily_wealth'], np.ndarray)
-                else result['daily_wealth'],
-        }
-        for name, result in bah_results.items()
-        if result is not None
-    }
-
-    with open(results_dir / 'benchmarks.json', 'w') as f:
-        json.dump(benchmarks_data, f, indent=2, cls=NumpyEncoder)
-    print(f"Benchmarks saved to: {results_dir / 'benchmarks.json'}")
-
-    metadata = {
-        'run_info': {
-            'timestamp': timestamp,
-            'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            **run_info,
-        },
-        'experiment_settings': {
-            'stocks': data_dict['stock_names'],
-            'n_stocks': len(data_dict['stock_names']),
-            'has_cash': data_dict.get('has_cash', False),
-            'cash_index': data_dict.get('cash_index', None),
-            'train_days': len(data_dict['train_price_relatives']),
-            'val_days': len(data_dict['val_price_relatives']),
-            'test_days': len(data_dict['test_price_relatives']),
-            'train_start': str(data_dict['train_val_split_date']),
-            'val_end': str(data_dict['val_test_split_date']),
-        },
-        'benchmarks': {
-            name: {'final_wealth': float(result['final_wealth'])}
-            for name, result in bah_results.items()
-            if result is not None
-        },
-    }
-
-    with open(results_dir / 'experiment_metadata.json', 'w') as f:
-        json.dump(metadata, f, indent=2, cls=NumpyEncoder)
-    print(f"Metadata saved to: {results_dir / 'experiment_metadata.json'}")
-
-    # all_results.csv
-    all_results_list = []
-    for model_name, experiment in experiments.items():
-        for result in experiment.all_results:
-            row = {
-                'model': model_name,
-                **result['parameters'],
-                'train_final_wealth': result['training']['final_wealth'],
-                'train_total_cost': result['training']['total_transaction_cost'],
-                'train_trade_freq': result['training']['trade_frequency'],
-                'val_final_wealth': result['validation']['final_wealth'],
-                'val_total_cost': result['validation']['total_transaction_cost'],
-                'val_trade_freq': result['validation']['trade_frequency'],
-            }
-            all_results_list.append(row)
-
-    pd.DataFrame(all_results_list).to_csv(results_dir / 'all_results.csv', index=False)
-    print(f"All results saved to: {results_dir / 'all_results.csv'}")
-
-    # detailed_results.json
-    detailed_results = {}
-    for model_name, experiment in experiments.items():
-        detailed_results[model_name] = {
-            'best_parameters': experiment.best_params,
-            'all_parameter_combinations': experiment.all_results,
-            'retrain_on_train_val': {
-                'final_wealth': experiment.retrain_results['final_wealth'],
-                'daily_wealth': experiment.retrain_results['daily_wealth'].tolist()
-                    if isinstance(experiment.retrain_results['daily_wealth'], np.ndarray)
-                    else experiment.retrain_results['daily_wealth'],
-                'portfolios_used': experiment.retrain_results['portfolios_used'].tolist()
-                    if isinstance(experiment.retrain_results['portfolios_used'], np.ndarray)
-                    else experiment.retrain_results['portfolios_used'],
-                'transaction_costs': experiment.retrain_results['transaction_costs'].tolist()
-                    if isinstance(experiment.retrain_results['transaction_costs'], np.ndarray)
-                    else experiment.retrain_results['transaction_costs'],
-                'turnovers': experiment.retrain_results['turnovers'].tolist()
-                    if isinstance(experiment.retrain_results['turnovers'], np.ndarray)
-                    else experiment.retrain_results['turnovers'],
-                'total_transaction_cost': experiment.retrain_results['total_transaction_cost'],
-                'avg_turnover': experiment.retrain_results['avg_turnover'],
-                'trade_frequency': experiment.retrain_results['trade_frequency'],
-                'num_days': experiment.retrain_results['num_days'],
-            },
-            'test': {
-                **experiment.test_results,
-                'portfolios_used': [
-                    p.tolist() if isinstance(p, np.ndarray) else p
-                    for p in experiment.test_results['portfolios_used']
-                ],
-                'test_price_relatives': data_dict['test_price_relatives'].tolist()
-            },
-        }
-
-    with open(results_dir / 'detailed_results.json', 'w') as f:
-        json.dump(detailed_results, f, indent=2, cls=NumpyEncoder)
-    print(f"Detailed results saved to: {results_dir / 'detailed_results.json'}")
-    print(f"\nAll results saved in: {results_dir}")
-
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.bool_):
-            return bool(obj)
-        if isinstance(obj, (datetime, np.datetime64)):
-            return obj.isoformat()
-        return super().default(obj)
