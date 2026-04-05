@@ -12,8 +12,7 @@ from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
 from scipy.stats import skew, kurtosis
 
-from utils.metrics import compute_risk_metrics, compute_dsr
-from utils.io import make_optuna_storage, save_experiment_results, NumpyEncoder
+from utils.metrics import compute_risk_metrics, compute_dsr, regime_metrics, print_regime_summary
 
 class _ExperimentMixin:
     """
@@ -546,3 +545,59 @@ class BaseOptunaExperiment(_ExperimentMixin, ABC):
 
         self.bah_results = bah_results
         return bah_results
+
+    def regime_analysis(self, sp500_prices, val_dates, test_dates, ma_window=200, verbose=True):
+        """
+        Classify each val and test day as bull/bear using a rolling MA of S&P 500.
+        Bull = S&P 500 price > ma_window-day MA, bear otherwise.
+        Requires run_test() to have been called first.
+
+        sp500_prices: pd.Series with DatetimeIndex, must start at least ma_window
+                     trading days before val_dates[0] for the MA to be warmed up
+        val_dates: DatetimeIndex from data_dict['val_dates']
+        test_dates: DatetimeIndex from data_dict['test_dates']
+        """
+        if self.test_results is None:
+            raise RuntimeError("Call run_test() before regime_analysis().")
+
+        sp500_ma = sp500_prices.rolling(window=ma_window).mean()
+
+        def classify_dates(dates):
+            mask = []
+            for date in dates:
+                if date in sp500_ma.index:
+                    ma_val = sp500_ma.loc[date]
+                    price_val = sp500_prices.loc[date]
+                    mask.append(bool(~pd.isna(ma_val) and price_val > ma_val))
+                else:
+                    mask.append(True)  # default bull if date missing
+            return np.array(mask)
+
+        # Val returns from best trial
+        best_val = max(self.all_results, key=lambda x: x['validation'][self.optimize_metric])
+        val_wealth = np.array(best_val['validation']['daily_wealth'])
+        val_returns = np.diff(val_wealth) / val_wealth[:-1]
+
+        # Test returns
+        test_wealth = np.array(self.test_results['daily_wealth'])
+        test_returns = np.diff(test_wealth) / test_wealth[:-1]
+
+        results = {}
+        for period_name, returns, dates in [
+            ('validation', val_returns, val_dates),
+            ('test', test_returns, test_dates),
+        ]:
+            bull_mask = classify_dates(dates)
+            bear_mask = ~bull_mask
+            results[period_name] = {
+                'bull': regime_metrics(returns[bull_mask]),
+                'bear': regime_metrics(returns[bear_mask]),
+                'daily_regime': bull_mask.tolist(),
+            }
+
+        self.regime_results = results
+
+        if verbose:
+            print_regime_summary(results)
+
+        return results

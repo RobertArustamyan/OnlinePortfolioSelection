@@ -131,6 +131,7 @@ def save_experiment_results(results_dir, experiments: dict, data_dict: dict,
                 ],
                 'test_price_relatives': data_dict['test_price_relatives'].tolist()
             },
+            'regime_analysis': experiment.regime_results if hasattr(experiment, 'regime_results') else None,
         }
 
     with open(results_dir / 'detailed_results.json', 'w') as f:

@@ -9,14 +9,14 @@ from datetime import datetime
 
 import numpy as np
 from dotenv import load_dotenv
+import yfinance as yf
 
 from algorithms.portfolio.online_newton_step_costs import OnlineNewtonStepCosts
 from experiments.portfolio.base_experiment import BaseOptunaExperiment
 from algorithms.transactions.interactive_brokers import InteractiveBrokersCostUSD
 from utils.data_prep import prepare_stock_data_3split
 from benchmarks.portfolio.buy_and_hold import run_buy_and_hold
-from experiments.portfolio.base_experiment import make_optuna_storage
-from experiments.portfolio.base_experiment import save_experiment_results, NumpyEncoder
+from utils.io import make_optuna_storage, save_experiment_results, NumpyEncoder
 from experiments.portfolio.ons.visualisation_ons import ExperimentPlotter
 from experiments.portfolio.stability_analysis import run_stability_analysis
 
@@ -75,7 +75,7 @@ if __name__ == "__main__":
     # Shared config
     STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
     INITIAL_CAPITAL = 5000
-    N_TRIALS = 40
+    N_TRIALS = 8
     N_JOBS = 10
     CASH_POSITION = False
 
@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
     if RUN_MODE == "single":
         price_to_k = INITIAL_CAPITAL / 1000
-
+        sp500_prices = yf.download('^GSPC', start=TRAIN_START_DATE, end=TEST_END_DATE, auto_adjust=True)['Close'].squeeze()
         data_dict = prepare_stock_data_3split(
             stocks=STOCKS,
             train_start_date=TRAIN_START_DATE,
@@ -148,6 +148,8 @@ if __name__ == "__main__":
 
         experiment.print_optuna_summary(top_n=10)
         experiment.run_test(best_params, verbose=True)
+
+        experiment.regime_analysis(sp500_prices=sp500_prices, val_dates=data_dict['val_dates'], test_dates=data_dict['test_dates'], verbose=True,)
 
         bah_results = experiment.compute_benchmarks(
             test_price_relatives=data_dict['test_price_relatives'],

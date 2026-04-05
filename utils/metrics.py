@@ -62,3 +62,27 @@ def compute_dsr(sharpe_obs, n_trials, n_days, skewness, excess_kurtosis):
 
     dsr = ndtr((sharpe_obs - e_max_sr) / sr_std)
     return round(float(dsr), 4)
+
+def regime_metrics(returns):
+    if len(returns) < 2:
+        return {'n_days': len(returns), 'total_return_pct': 0.0, 'sharpe': 0.0, 'sortino': 0.0}
+    total_return = float(np.prod(1 + returns) - 1) * 100
+    sharpe = float(np.mean(returns) / np.std(returns) * np.sqrt(252)) if np.std(returns) > 1e-10 else 0.0
+    downside = returns[returns < 0]
+    sortino = float(np.mean(returns) / np.sqrt(np.mean(downside ** 2)) * np.sqrt(252)) if len(downside) > 1 else 0.0
+    return {
+        'n_days': len(returns),
+        'total_return_pct': round(total_return, 4),
+        'sharpe': round(sharpe, 4),
+        'sortino': round(sortino, 4),
+    }
+
+
+def print_regime_summary(regime_results):
+    for period, data in regime_results.items():
+        print(f"\nRegime analysis — {period}")
+        print(f"{'Regime':<8} {'Days':>6} {'Return%':>9} {'Sharpe':>8} {'Sortino':>8}")
+        print('-' * 44)
+        for regime in ('bull', 'bear'):
+            m = data[regime]
+            print(f"{regime:<8} {m['n_days']:>6} {m['total_return_pct']:>9.2f} {m['sharpe']:>8.4f} {m['sortino']:>8.4f}")

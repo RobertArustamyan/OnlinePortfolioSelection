@@ -17,8 +17,10 @@ plt.rcParams['grid.alpha'] = 0.7
 
 
 class ExperimentPlotter:
-    def __init__(self, experiment_dir):
+    def __init__(self, experiment_dir, initial_capital=None, optimize_metric=None):
         self.experiment_dir = Path(experiment_dir)
+        self.initial_capital = initial_capital
+        self.optimize_metric = optimize_metric
 
         with open(self.experiment_dir / 'detailed_results.json', 'r') as f:
             self.data = json.load(f)
@@ -112,9 +114,19 @@ class ExperimentPlotter:
                                label=f'{blabel}: {bfinal:.3f}',
                                linestyle=bstyle, alpha=0.8)
 
+        regime_data = self.model_data.get('regime_analysis', {})
+        test_regime = regime_data.get('test', {}).get('daily_regime', [])
+        self._shade_regimes(ax_wealth, test_regime)
+
         ax_wealth.set_xlabel('Trading Day', fontsize=12, fontweight='bold')
         ax_wealth.set_ylabel('Wealth (Normalized)', fontsize=12, fontweight='bold')
-        ax_wealth.set_title('Test Period: Wealth Evolution', fontsize=14, fontweight='bold')
+        # Build title with optional initial_capital and optimize_metric
+        title_parts = ['Test Period: Wealth Evolution']
+        if self.initial_capital is not None:
+            title_parts.append(f'${self.initial_capital:,}')
+        if self.optimize_metric is not None:
+            title_parts.append(f'Optimized: {self.optimize_metric}')
+        ax_wealth.set_title('  |  '.join(title_parts), fontsize=14, fontweight='bold')
         ax_wealth.legend(fontsize=9, frameon=True, shadow=True, loc='best')
         ax_wealth.grid(**self._grid_kwargs())
 
@@ -511,6 +523,25 @@ class ExperimentPlotter:
 
         print(f"\nAll {len(plots)} plots created.")
 
+    def _shade_regimes(self, ax, daily_regime):
+        """
+        Shade background of ax with subtle green (bull) / red (bear) regions.
+        daily_regime: list of bool, True=bull, False=bear, aligned with trading days.
+        """
+        if not daily_regime:
+            return
+
+        regime = np.array(daily_regime)
+        n = len(regime)
+        i = 0
+        while i < n:
+            val = regime[i]
+            j = i
+            while j < n and regime[j] == val:
+                j += 1
+            color = '#b7e4b7' if val else '#f5b7b1'  # muted green / muted red
+            ax.axvspan(i, j, alpha=0.25, color=color, linewidth=0)
+            i = j
 
 def main():
     experiment_dir = "/home/robert/PycharmProjects/OnlinePortfolioSelection/results/portfolio/WithCosts/ONS_Synthetic/optuna_5_11-03-26_21-50"
